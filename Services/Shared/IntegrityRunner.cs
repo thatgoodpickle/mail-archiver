@@ -33,8 +33,12 @@ namespace MailArchiver.Services.Shared
         private Task? _current;
         private int _currentRunId;
 
-        public IntegrityRunner(IServiceScopeFactory scopes, IHostApplicationLifetime lifetime, ILogger<IntegrityRunner> logger)
+        private readonly IAuditChain? _auditChain;
+
+        public IntegrityRunner(IServiceScopeFactory scopes, IHostApplicationLifetime lifetime, ILogger<IntegrityRunner> logger,
+            IAuditChain? auditChain = null)
         {
+            _auditChain = auditChain;
             _scopes = scopes;
             _lifetime = lifetime;
             _logger = logger;
@@ -179,6 +183,16 @@ namespace MailArchiver.Services.Shared
                     .SetProperty(r => r.FinishedAt, DateTime.UtcNow)
                     .SetProperty(r => r.Error, error));
                 _logger.LogInformation("Integrity verify-all run {RunId} finished: {Status}", runId, status);
+
+                if (_auditChain != null)
+                {
+                    var run = await db.IntegrityRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+                    await _auditChain.AppendAsync("integrity.run", null, null, new
+                    {
+                        runId, status, total = run.Total, @checked = run.Checked, valid = run.Valid, invalid = run.Invalid,
+                        missing = run.Missing, notStored = run.NotStored, inconsistent = run.Inconsistent, errors = run.Errors
+                    });
+                }
             }
             catch (Exception ex)
             {

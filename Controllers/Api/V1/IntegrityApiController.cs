@@ -20,8 +20,12 @@ public class IntegrityApiController : ApiControllerBase
     private readonly IIntegrityRunner _runner;
     private readonly IAuthenticationService _authService;
 
-    public IntegrityApiController(MailArchiverDbContext context, IIntegrityRunner runner, IAuthenticationService authService)
+    private readonly IAuditChainVerifier? _chain;
+
+    public IntegrityApiController(MailArchiverDbContext context, IIntegrityRunner runner, IAuthenticationService authService,
+        IAuditChainVerifier? chain = null)
     {
+        _chain = chain;
         _context = context;
         _runner = runner;
         _authService = authService;
@@ -51,6 +55,34 @@ public class IntegrityApiController : ApiControllerBase
         limit = Math.Clamp(limit, 1, 200);
         var runs = await _context.IntegrityRuns.AsNoTracking().OrderByDescending(r => r.Id).Take(limit).ToListAsync();
         return Ok(runs.Select(Dto));
+    }
+
+    /// <summary>
+    /// Current end of the audit chain: sequence number and hash. This pair is what to copy somewhere
+    /// the archive machine cannot reach; any later change to an earlier entry changes every hash after it.
+    /// </summary>
+    [HttpGet("chain/head")]
+    public async Task<IActionResult> ChainHead()
+    {
+        if (_chain == null) return Problem(statusCode: 501, title: "The audit chain is not available.");
+        var head = await _chain.GetHeadAsync();
+        return head == null ? Ok(new { entries = 0, head = (object?)null }) : Ok(new { seq = head.Seq, hash = head.Hash, timestamp = head.Timestamp });
+    }
+
+    /// <summary>Walks the whole chain and reports the first break, hash changes and unchained emails.</summary>
+    [HttpGet("chain/verify")]
+    public async Task<IActionResult> ChainVerify()
+    {
+        if (_chain == null) return Problem(statusCode: 501, title: "The audit chain is not available.");
+        var r = await _chain.VerifyAsync();
+        return Ok(new
+        {
+            ok = r.Ok, entries = r.Entries,
+            head = r.Head == null ? null : new { seq = r.Head.Seq, hash = r.Head.Hash },
+            firstBreak = r.FirstBreak == null ? null : new { seq = r.FirstBreak.Seq, reason = r.FirstBreak.Reason },
+            warnings = r.Warnings,
+            emailsWithoutArchiveEntry = r.EmailsWithoutArchiveEntry
+        });
     }
 
     /// <summary>One run with its findings (the first 1000, oldest first).</summary>

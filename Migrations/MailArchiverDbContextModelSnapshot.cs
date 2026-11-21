@@ -396,6 +396,43 @@ namespace MailArchiver.Migrations
                     b.ToTable("AttachmentContents", "mail_archiver");
                 });
 
+            modelBuilder.Entity("MailArchiver.Models.AuditChainEntry", b =>
+                {
+                    b.Property<long>("Seq")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("EmailId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("EntryHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PrevHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Sha256")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Seq");
+
+                    b.HasIndex("EmailId");
+
+                    b.ToTable("AuditChain", "mail_archiver");
+                });
+
             modelBuilder.Entity("MailArchiver.Models.AuditExportJob", b =>
                 {
                     b.Property<Guid>("Id")

@@ -427,7 +427,8 @@ builder.Services.AddDbContext<MailArchiverDbContext>((serviceProvider, options) 
     )
     .ConfigureWarnings(warnings => warnings.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning))
     .ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory, MailArchiver.Data.CredentialModelCacheKeyFactory>()
-    .AddInterceptors(serviceProvider.GetRequiredService<MailArchiver.Services.AttachmentDeduplicationInterceptor>());
+    .AddInterceptors(serviceProvider.GetRequiredService<MailArchiver.Services.AttachmentDeduplicationInterceptor>(),
+        serviceProvider.GetRequiredService<MailArchiver.Services.Shared.AuditChainInterceptor>());
     
     // Enable sensitive data logging for debugging (remove in production)
     if (builder.Environment.IsDevelopment())
@@ -503,6 +504,9 @@ builder.Services.Configure<MailArchiver.Models.StorageModeOptions>(builder.Confi
 builder.Services.AddScoped<MailArchiver.Services.Shared.ILeanIngest, MailArchiver.Services.Shared.LeanIngest>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.IIntegrityService, MailArchiver.Services.Shared.IntegrityService>();
 builder.Services.Configure<MailArchiver.Models.IntegrityOptions>(builder.Configuration.GetSection(MailArchiver.Models.IntegrityOptions.Section));
+builder.Services.AddSingleton<MailArchiver.Services.Shared.IAuditChain, MailArchiver.Services.Shared.AuditChain>();
+builder.Services.AddSingleton<MailArchiver.Services.Shared.AuditChainInterceptor>();
+builder.Services.AddScoped<MailArchiver.Services.Shared.IAuditChainVerifier, MailArchiver.Services.Shared.AuditChainVerifier>();
 builder.Services.AddSingleton<MailArchiver.Services.Shared.IIntegrityRunner, MailArchiver.Services.Shared.IntegrityRunner>();
 builder.Services.AddHostedService<MailArchiver.Services.Shared.IntegrityScheduleService>();
 

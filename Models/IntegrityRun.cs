@@ -63,5 +63,33 @@ namespace MailArchiver.Models
 
         /// <summary>Delay before the first scheduled run, in minutes, so startup settles first.</summary>
         public int ScheduleStartupDelayMinutes { get; set; } = 10;
+
+        /// <summary>
+        /// Keep the hash-chained audit trail (AuditChain table): every access-log entry, every
+        /// original stored and every verify-all run is appended with the hash of the previous entry.
+        /// On by default; a failed append is logged at error level but never blocks the action.
+        /// </summary>
+        public bool AuditChainEnabled { get; set; } = true;
+    }
+
+    /// <summary>
+    /// One link of the tamper-evident audit trail. <see cref="EntryHash"/> is the SHA-256 of the
+    /// entry's fields and <see cref="PrevHash"/>, so changing or removing any earlier entry breaks
+    /// every later hash. <see cref="Seq"/> counts from 1 without gaps. A database trigger refuses
+    /// UPDATE, DELETE and TRUNCATE (protection against mistakes and non-owner tampering; the table
+    /// owner can still drop the trigger, which is why the chain head is also kept elsewhere).
+    /// </summary>
+    public class AuditChainEntry
+    {
+        public const string GenesisHash = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        public long Seq { get; set; }
+        public DateTime Timestamp { get; set; }
+        public string Kind { get; set; } = string.Empty;
+        public int? EmailId { get; set; }
+        public string? Sha256 { get; set; }
+        public string Payload { get; set; } = "{}";
+        public string PrevHash { get; set; } = GenesisHash;
+        public string EntryHash { get; set; } = string.Empty;
     }
 }
