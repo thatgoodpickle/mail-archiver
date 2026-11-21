@@ -14,6 +14,23 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # Throwaway database for the test run only; values are the repo's placeholder defaults.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: MailArchiver
+          POSTGRES_USER: mailuser
+          POSTGRES_PASSWORD: masterkey
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mailuser -d MailArchiver"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MailArchiverTest__ConnectionStrings__DefaultConnection: "Host=localhost;Database=MailArchiver;Username=mailuser;Password=masterkey"
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
