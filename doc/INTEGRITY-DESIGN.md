@@ -29,6 +29,38 @@ proven at any time. Mbox import is out of scope (its copy is re-serialized, see
   before any lean-mode code is written.
 - `AccessLog` + `AccessLogService`; read-only REST API and MCP server.
 
+## Stage 0 findings (read from the code, 2026-11-21; nothing was run)
+
+1. **Search is computed from the stored body.** `EmailFilterSql.cs` builds
+   `to_tsvector('simple', Subject || Body || From || To || Cc || Bcc)` at query time, backed by
+   an expression GIN index (migration 20250821132800), and phrase searches also use
+   `POSITION(...)` on `Subject`/`Body`/`From`. It uses plain-text `Body`, not `HtmlBody`.
+   Consequence: lean mode cannot simply drop `Body`; the index would index nothing. Lean mode
+   needs its own search source (a column or small table filled at ingest from the parsed
+   original, with the GIN index on it) and the query code switched to it. Dropping
+   `HtmlBody` and attachment bytes is the cheap part.
+2. **`IsLocked` is weaker than it looks.** The trigger `prevent_locked_email_changes` only
+   rejects changes to `Subject`, `Body`, `From`, `To` and `ContentHash` on a locked row (not
+   `HtmlBody`, `Cc`, `Bcc`, dates, folder or attachments; the earlier "any change except
+   IsLocked/FolderName" wording was wrong), and a second trigger blocks deleting locked rows.
+   But account deletion (`MailAccountsController`, ~line 1422) first sets `IsLocked=false`
+   for every email of the account, then deletes them, and the deletion policy can change the
+   flag at startup. So it is a guard against accidental edits, not an audit control. It does
+   not cover `RawMessages` at all. Lean mode must not rely on it; audit protection comes from
+   read-only originals, hashes, the verify job and the hash-chained log. Lean conversion of
+   locked rows needs `Body` handled around the trigger.
+3. **Auditor recipe (code level):** the filesystem store writes a plain
+   `GZipStream` stream (`RawMessageCodec.Compress`, written with `File.WriteAllBytesAsync`),
+   and `Sha256` is the SHA-256 of the uncompressed bytes (`ComputeSha256`). So
+   `gunzip -c file | sha256sum` should equal the stored value. Still to confirm on a real
+   stored file once a test stack runs.
+4. **Interface actions that change or remove mail:** `Delete`, `DeleteSelected`,
+   `DeleteByFilter` (plus the account-deletion path) in `EmailsController` /
+   `MailAccountsController`, and the restore flows (which append to a mailbox). No
+   content-edit action was found. The REST API has no write/delete endpoints. Lean mode must
+   gate or disable deletion for the audit setup (`ENABLE_DELETION`-style switch plus the
+   deletion policy), and restore must keep refusing on a hash mismatch.
+
 ## Phase 1: make the original mandatory, prove it
 
 1. `RawMessages:Required` (default false, so upstream behaviour is unchanged): when true,
