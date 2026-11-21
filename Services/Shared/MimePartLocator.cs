@@ -44,6 +44,28 @@ namespace MailArchiver.Services.Shared
             return null;
         }
 
+        /// <summary>Every entity of the message with its path, depth first (the order used when locating parts).</summary>
+        public static IEnumerable<(string Path, MimeEntity Entity)> Enumerate(MimeMessage message)
+        {
+            if (message.Body == null) yield break;
+            foreach (var item in EnumerateFrom(message.Body, Root)) yield return item;
+        }
+
+        private static IEnumerable<(string Path, MimeEntity Entity)> EnumerateFrom(MimeEntity entity, string path)
+        {
+            yield return (path, entity);
+
+            if (entity is Multipart multipart)
+            {
+                for (var i = 0; i < multipart.Count; i++)
+                    foreach (var item in EnumerateFrom(multipart[i], $"{path}/c{i}")) yield return item;
+            }
+            else if (entity is MessagePart messagePart && messagePart.Message?.Body != null)
+            {
+                foreach (var item in EnumerateFrom(messagePart.Message.Body, $"{path}/m")) yield return item;
+            }
+        }
+
         /// <summary>Returns the entity at <paramref name="path"/>, or null if the path does not exist in this message.</summary>
         public static MimeEntity? Resolve(MimeMessage message, string path)
         {

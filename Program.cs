@@ -499,6 +499,22 @@ builder.Services.AddScoped<MailArchiver.Services.Shared.IOriginalMessageReader,
     MailArchiver.Services.Shared.OriginalMessageReader>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.IStrippedContentHydrator,
     MailArchiver.Services.Shared.StrippedContentHydrator>();
+builder.Services.Configure<MailArchiver.Models.StorageModeOptions>(builder.Configuration.GetSection(MailArchiver.Models.StorageModeOptions.Section));
+builder.Services.AddScoped<MailArchiver.Services.Shared.ILeanIngest, MailArchiver.Services.Shared.LeanIngest>();
+
+// Fork: Storage:Mode=Lean is only valid with originals stored on the filesystem, hash-named and
+// without a size limit; refuse to start otherwise rather than archive emails without their content.
+{
+    var storageMode = builder.Configuration.GetSection(MailArchiver.Models.StorageModeOptions.Section)
+        .Get<MailArchiver.Models.StorageModeOptions>() ?? new MailArchiver.Models.StorageModeOptions();
+    var rawForCheck = builder.Configuration.GetSection(MailArchiver.Models.RawMessageOptions.RawMessages)
+        .Get<MailArchiver.Models.RawMessageOptions>() ?? new MailArchiver.Models.RawMessageOptions();
+    var leanProblems = storageMode.Validate(rawForCheck);
+    if (leanProblems.Count > 0)
+    {
+        throw new InvalidOperationException("Invalid lean storage configuration: " + string.Join(" ", leanProblems));
+    }
+}
 builder.Services.AddScoped<MailArchiver.Services.Shared.RawMessageStorageMigrator>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.RawMessageOrphanCollector>();
 builder.Services.AddHostedService<MailArchiver.Services.RawMessageOrphanCleanupService>();

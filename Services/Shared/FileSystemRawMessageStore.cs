@@ -83,6 +83,25 @@ namespace MailArchiver.Services.Shared
             File.Move(temp, absolute, overwrite: true);
         }
 
+        /// <summary>
+        /// Reads back the file a row points at, straight from disk, and returns the uncompressed
+        /// bytes only when their SHA-256 equals the row's. Needs no database row, so it can prove a
+        /// file was written correctly BEFORE the email row exists (lean ingest). Null when the file
+        /// is missing or does not match.
+        /// </summary>
+        public async Task<byte[]?> ReadWrittenAsync(RawMessage row)
+        {
+            if (!row.IsFileSystemBacked || string.IsNullOrEmpty(row.StoragePath)) return null;
+
+            var absolute = _paths.GetAbsolutePath(row.StoragePath);
+            if (!File.Exists(absolute)) return null;
+
+            var bytes = RawMessageCodec.Decompress(await File.ReadAllBytesAsync(absolute), row.Size);
+            return string.Equals(RawMessageCodec.ComputeSha256(bytes), row.Sha256, StringComparison.Ordinal)
+                ? bytes
+                : null;
+        }
+
         public async Task<bool> ExistsAsync(int emailId)
         {
             var row = await _context.RawMessages

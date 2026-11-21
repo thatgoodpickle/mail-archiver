@@ -31,6 +31,8 @@ namespace MailArchiver.Services.Core
         private readonly IRawMessageStore? _rawMessageStore;
         private readonly IMetricsRecorder? _metricsRecorder;
         private readonly IStrippedContentHydrator? _contentHydrator;
+        private readonly StorageModeOptions _storageMode;
+        private readonly ILeanIngest? _leanIngest;
 
         public EmailCoreService(
             MailArchiverDbContext context,
@@ -42,8 +44,12 @@ namespace MailArchiver.Services.Core
             IOptions<RawMessageOptions>? rawMessageOptions = null,
             IRawMessageStore? rawMessageStore = null,
             IMetricsRecorder? metricsRecorder = null,
-            IStrippedContentHydrator? contentHydrator = null)
+            IStrippedContentHydrator? contentHydrator = null,
+            IOptions<StorageModeOptions>? storageMode = null,
+            ILeanIngest? leanIngest = null)
         {
+            _storageMode = storageMode?.Value ?? new StorageModeOptions();
+            _leanIngest = leanIngest;
             _context = context;
             _logger = logger;
             _dateTimeHelper = dateTimeHelper;
@@ -2051,15 +2057,67 @@ namespace MailArchiver.Services.Core
 
                 archivedEmail.RawMessage = null;
 
+                // Lean storage (Storage:Mode=Lean): archive from the original. The original is written
+                // and verified first; only if every attachment is found again in it do the HTML body,
+                // the untruncated variants and the attachment bytes stay out of the database. Any
+                // failure (or a synthesized calendar attachment, which is not a part of the original)
+                // keeps the upstream behaviour: the email is stored in full.
+                LeanIngestPlan? leanPlan = null;
+                if (_storageMode.IsLean && _leanIngest != null && rawMessage != null)
+                {
+                    if (calendarExtraction != null)
+                    {
+                        _logger.LogWarning("Lean ingest skipped for '{Subject}': it carries a synthesized calendar attachment; stored in full", subject);
+                    }
+                    else
+                    {
+                        leanPlan = await _leanIngest.TryPrepareAsync(rawMessage, emailAttachments.Select(a => a.Content).ToList());
+                    }
+                }
+
+                if (leanPlan != null)
+                {
+                    var leanAttachments = new List<EmailAttachment>(emailAttachments.Count);
+                    for (var i = 0; i < emailAttachments.Count; i++)
+                    {
+                        var source = emailAttachments[i];
+                        // No Content set: the dedup interceptor skips attachments without bytes.
+                        leanAttachments.Add(new EmailAttachment
+                        {
+                            FileName = source.FileName,
+                            ContentType = source.ContentType,
+                            ContentId = source.ContentId,
+                            Size = source.Size,
+                            PartPath = leanPlan.Attachments[i].PartPath,
+                            Sha256 = leanPlan.Attachments[i].Sha256
+                        });
+                    }
+
+                    archivedEmail.Attachments = leanAttachments;
+                    archivedEmail.HtmlBody = string.Empty;
+                    archivedEmail.BodyUntruncatedText = null;
+                    archivedEmail.BodyUntruncatedHtml = null;
+                    archivedEmail.OriginalBodyText = null;
+                    archivedEmail.OriginalBodyHtml = null;
+                    archivedEmail.ContentStripped = true;
+                    archivedEmail.RawMessage = leanPlan.Row; // inserted together with the email
+                }
+
                 try
                 {
                     _context.ArchivedEmails.Add(archivedEmail);
                     await _context.SaveChangesAsync();
 
                     // The row is in place, so the id exists; a filesystem-backed original is
-                    // written now and its metadata row added in a second save.
-                    var storedRaw = _rawMessageStore.CreateRow(archivedEmail.Id, rawMessage);
-                    if (storedRaw != null)
+                    // written now and its metadata row added in a second save. Lean emails already
+                    // carry their verified original row.
+                    var storedRaw = leanPlan != null ? null : _rawMessageStore.CreateRow(archivedEmail.Id, rawMessage);
+                    if (leanPlan != null)
+                    {
+                        _logger.LogInformation("Archived lean: '{Subject}' ({Count} attachments kept only in the original {Path})",
+                            archivedEmail.Subject, archivedEmail.Attachments.Count, leanPlan.Row.StoragePath);
+                    }
+                    else if (storedRaw != null)
                     {
                         archivedEmail.RawMessage = storedRaw;
                         try
