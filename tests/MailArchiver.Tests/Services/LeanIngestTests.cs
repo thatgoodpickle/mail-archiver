@@ -1,6 +1,7 @@
 using System.Text;
 using MailArchiver.Data;
 using MailArchiver.Models;
+using MailArchiver.Services;
 using MailArchiver.Services.Core;
 using MailArchiver.Services.Shared;
 using MailArchiver.Tests.Infrastructure;
@@ -62,6 +63,22 @@ public class LeanIngestTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); } catch { }
+    }
+
+    // Production registers the attachment de-duplication interceptor on the context; the shared
+    // fixture context does not, so these tests build one that does (otherwise upstream's own
+    // full-storage path would not persist attachment bytes in the test harness).
+    private MailArchiverDbContext NewContext()
+        => new(new DbContextOptionsBuilder<MailArchiverDbContext>()
+            .UseNpgsql(_fixture.ConnectionString, npgsql => npgsql.CommandTimeout(120))
+            .AddInterceptors(new AttachmentDeduplicationInterceptor(NullLogger<AttachmentDeduplicationInterceptor>.Instance))
+            .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning))
+            .Options);
+
+    private static Task DeleteContentRowAsync(MailArchiverDbContext ctx, byte[] bytes)
+    {
+        var sha = RawMessageCodec.ComputeSha256(bytes);
+        return ctx.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM mail_archiver.\"AttachmentContents\" WHERE \"Hash\" = {sha}");
     }
 
     private RawMessageOptions Options_() => new()
@@ -142,7 +159,7 @@ public class LeanIngestTests : IDisposable
     [Fact]
     public async Task Archive_Lean_KeepsOnlyIndexData_AndTheOriginalGivesEverythingBack()
     {
-        var ctx = _fixture.CreateContext();
+        var ctx = NewContext();
         var account = await SeedAccountAsync(ctx);
         try
         {
@@ -162,6 +179,7 @@ public class LeanIngestTests : IDisposable
             var att = Assert.Single(email.Attachments);
             Assert.Null(att.AttachmentContentId);           // no bytes, no shared content row
             Assert.Null(att.LegacyContent);
+            Assert.Equal(0, await ctx.AttachmentContents.CountAsync(c => c.Hash == RawMessageCodec.ComputeSha256(pdf)));
             Assert.False(string.IsNullOrEmpty(att.PartPath));
             Assert.Equal(RawMessageCodec.ComputeSha256(pdf), att.Sha256);
 
@@ -185,7 +203,7 @@ public class LeanIngestTests : IDisposable
     [Fact]
     public async Task Archive_Lean_WhenAnAttachmentCannotBeFoundInTheOriginal_StoresTheEmailInFull()
     {
-        var ctx = _fixture.CreateContext();
+        var ctx = NewContext();
         var account = await SeedAccountAsync(ctx);
         try
         {
@@ -209,6 +227,7 @@ public class LeanIngestTests : IDisposable
         finally
         {
             await CleanupAsync(ctx, account);
+            await DeleteContentRowAsync(ctx, BuildMail().Pdf);
             await ctx.DisposeAsync();
         }
     }
@@ -216,7 +235,7 @@ public class LeanIngestTests : IDisposable
     [Fact]
     public async Task Archive_Lean_WithoutACapture_StoresTheEmailInFull()
     {
-        var ctx = _fixture.CreateContext();
+        var ctx = NewContext();
         var account = await SeedAccountAsync(ctx);
         try
         {
@@ -240,7 +259,7 @@ public class LeanIngestTests : IDisposable
     [Fact]
     public async Task TryPrepare_ReturnsNull_WhenTheOriginalCannotBeWritten()
     {
-        var ctx = _fixture.CreateContext();
+        var ctx = NewContext();
         try
         {
             // the base path is a FILE, so no directory can be created under it
