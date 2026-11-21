@@ -120,6 +120,19 @@ filesystem storage and `MaxMessageSizeMb = 0` are required, otherwise the app re
   machine can change files, database, log and manifest together; against that, only the copy
   held somewhere root cannot reach (3) helps. The audit claim must not say more than that.
 
+### Build status (2026-11-21, CI green, 1327 tests)
+
+Built and tested on GitHub Actions: MimePartLocator + OriginalMessageReader; migration
+`AddLeanStorageColumns`; `RawMessages:FileSystem:HashNamed`; `StrippedContentHydrator` wired into
+every reader (pages, attachment view/download, exports, M365 restore, API) with the builder refusing
+a stripped email; lean ingest (`Storage:Mode=Lean`, default off: verified hash-named original first,
+lean row, every attachment re-found by hash, otherwise stored in full) with startup validation.
+Run lean with: `Storage__Mode=Lean`, `RawMessages__Enabled=true`, `RawMessages__Storage=filesystem`,
+`RawMessages__FileSystem__BasePath=<mounted dir>`, `RawMessages__FileSystem__HashNamed=true`,
+`RawMessages__MaxMessageSizeMb=0` (the app refuses to start with any of these wrong). Not yet built:
+verify-all job and integrity panel (Phase 1 items 2-5), hash-chained audit trail (Phase 2), MCP check,
+`RawMessages:Required` (refuse instead of fall back to full storage), OCR.
+
 ## Phase 1: make the original mandatory, prove it
 
 1. `RawMessages:Required` (default false, so upstream behaviour is unchanged): when true,
