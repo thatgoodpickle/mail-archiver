@@ -77,13 +77,15 @@ public class OriginalMessageReaderTests
                 ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "report.pdf" },
                 ContentTransferEncoding = ContentEncoding.Base64
             },
-            new MimePart("text", "plain")
+            // application/* (not text/*): MimeKit translates line endings in decoded text parts,
+            // so a binary type is what proves byte-exact decoding of quoted-printable.
+            new MimePart("application", "x-data")
             {
                 Content = new MimeContent(new MemoryStream(dupA)),
                 ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "same.txt" },
                 ContentTransferEncoding = ContentEncoding.QuotedPrintable
             },
-            new MimePart("text", "plain")
+            new MimePart("application", "x-data")
             {
                 Content = new MimeContent(new MemoryStream(dupB)),
                 ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "same.txt" },
