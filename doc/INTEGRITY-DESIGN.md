@@ -133,6 +133,33 @@ Run lean with: `Storage__Mode=Lean`, `RawMessages__Enabled=true`, `RawMessages__
 verify-all job and integrity panel (Phase 1 items 2-5), hash-chained audit trail (Phase 2), MCP check,
 `RawMessages:Required` (refuse instead of fall back to full storage), OCR.
 
+### Build status update (2026-11-22, CI green, 1357+ tests)
+
+Done since the status above: integrity panel on the detail page (`GET /Emails/Integrity/{id}`); MCP
+`get_email_integrity` and lean-aware `get_email`/`get_attachment`/`get_email_eml`; `RawMessages:Required`
+(IMAP, Graph and import paths refuse an email whose original cannot be kept; lean ingest that fails to
+verify also refuses; startup check that Required needs Enabled); Phase 2:
+
+- **Audit chain** (`AuditChain` table, migration `20261122100000_AddAuditChain`): `EntryHash` = SHA-256 of
+  `Seq|Timestamp(µs)|Kind|EmailId|Sha256|PrevHash|Payload`, `Seq` assigned by the writer under a
+  PostgreSQL advisory lock. A trigger refuses UPDATE/DELETE/TRUNCATE (stops mistakes and non-owner
+  changes; the table owner can drop it, which the head copy below covers). Chained events: every
+  access-log entry (free text as one hash), every original stored (`original.stored`, via an EF
+  interceptor on RawMessages inserts, so all import paths are covered), every verify-all run, every
+  manifest. `GET /api/v1/integrity/chain/head` and `/chain/verify` (first break, hash changed since
+  archiving, emails with no `original.stored` entry, e.g. stored before the chain existed).
+- **Signed manifest** (`POST /api/v1/integrity/manifests`, list, `GET .../{name}/verify`): JSONL of every
+  stored original (id, SHA-256, size, source, storage) plus a header with its SHA-256, count and chain
+  head, signed ECDSA P-256 (DER). Outsiders verify with
+  `openssl dgst -sha256 -verify public-key.pem -signature manifest-X.sig manifest-X.json`. Key and
+  manifests live in `Integrity:ManifestPath` on the same drive (user decision); the key location is
+  configurable (`Integrity:ManifestKeyPath`). Schedule: `Integrity:ManifestIntervalHours` (0 = off).
+- **Known limits, stated plainly:** root on the archive machine can re-sign and rewrite the chain
+  together; only a copy of the chain head (seq + hash) and the public key held elsewhere defeats that.
+  A failed chain append is logged but does not block the action; the verifier reports unchained emails.
+  A non-lean Required email whose original write fails AFTER the row is saved stays in the archive without
+  its original (lean mode writes the original first, so it cannot happen there); verify-all reports it as NotStored.
+
 ## Phase 1: make the original mandatory, prove it
 
 1. `RawMessages:Required` (default false, so upstream behaviour is unchanged): when true,
