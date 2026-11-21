@@ -42,7 +42,7 @@ public class OriginalMessageReaderTests
             Content = new MimeContent(new MemoryStream(png)),
             ContentId = "logo1",
             ContentDisposition = new ContentDisposition(ContentDisposition.Inline),
-            ContentTransferEncoding = ContentEncodings.Base64
+            ContentTransferEncoding = ContentEncoding.Base64
         };
         related.Add(inline);
 
@@ -63,7 +63,7 @@ public class OriginalMessageReaderTests
             {
                 Content = new MimeContent(new MemoryStream(unnamed)),
                 ContentDisposition = new ContentDisposition(ContentDisposition.Attachment),
-                ContentTransferEncoding = ContentEncodings.Base64
+                ContentTransferEncoding = ContentEncoding.Base64
             }
         };
         inner.Body = innerMixed;
@@ -75,19 +75,19 @@ public class OriginalMessageReaderTests
             {
                 Content = new MimeContent(new MemoryStream(pdf)),
                 ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "report.pdf" },
-                ContentTransferEncoding = ContentEncodings.Base64
+                ContentTransferEncoding = ContentEncoding.Base64
             },
             new MimePart("text", "plain")
             {
                 Content = new MimeContent(new MemoryStream(dupA)),
                 ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "same.txt" },
-                ContentTransferEncoding = ContentEncodings.QuotedPrintable
+                ContentTransferEncoding = ContentEncoding.QuotedPrintable
             },
             new MimePart("text", "plain")
             {
                 Content = new MimeContent(new MemoryStream(dupB)),
                 ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "same.txt" },
-                ContentTransferEncoding = ContentEncodings.Base64
+                ContentTransferEncoding = ContentEncoding.Base64
             },
             new MessagePart("rfc822") { Message = inner }
         };
