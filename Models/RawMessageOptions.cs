@@ -66,6 +66,17 @@ namespace MailArchiver.Models
         public int ShardDepth { get; set; } = 2;
 
         /// <summary>
+        /// Name each original by its SHA-256 (<c>ab/cd/&lt;sha256&gt;.eml.gz</c>) instead of by the
+        /// email id. The hash is then the stable identifier of the original, the file can be
+        /// written and verified before the email row exists, and byte-identical originals share
+        /// one file. Files named this way are written once and never deleted automatically (the
+        /// delete path and the orphan cleanup only act on id-named files). Off by default, so
+        /// upstream behaviour is unchanged; existing id-named rows stay readable either way
+        /// because the row records its own path.
+        /// </summary>
+        public bool HashNamed { get; set; } = false;
+
+        /// <summary>
         /// Whether a download re-computes the SHA-256 of the file and compares it with the
         /// checksum recorded at archive time. On by default: a file outside the database can be
         /// changed without the archive noticing, and a mismatch makes the download fail instead

@@ -49,6 +49,21 @@ namespace MailArchiver.Services.Shared
         }
 
         /// <summary>
+        /// Path of a hash-named original: two directory levels from the first four hex digits,
+        /// then <c>&lt;sha256&gt;.eml.gz</c>. Throws for anything that is not a 64-character
+        /// lowercase hex SHA-256, so a hash can never be used to build a path outside the base.
+        /// </summary>
+        public string GetRelativePathForHash(string sha256)
+        {
+            if (sha256 is not { Length: 64 } || !sha256.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'))
+            {
+                throw new ArgumentException("Expected a lowercase hex SHA-256 (64 characters).", nameof(sha256));
+            }
+
+            return $"{sha256[..2]}/{sha256.Substring(2, 2)}/{sha256}.eml.gz";
+        }
+
+        /// <summary>
         /// Absolute path of an email's file. Throws when the resolved path would leave the base
         /// directory, so a corrupted <c>StoragePath</c> column cannot be used to read elsewhere.
         /// </summary>

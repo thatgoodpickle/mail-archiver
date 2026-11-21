@@ -31,7 +31,15 @@ namespace MailArchiver.Services.Shared
         public string StorageType => RawMessageStorage.FileSystem;
 
         public RawMessage? CreateRow(int emailId, RawMessageCapture? capture)
-            => RawMessageCodec.CreateFileSystemBacked(capture, _options, _paths.GetRelativePath(emailId));
+        {
+            if (_options.FileSystem.HashNamed && RawMessageCodec.ShouldStore(capture, _options))
+            {
+                var relative = _paths.GetRelativePathForHash(RawMessageCodec.ComputeSha256(capture!.Bytes));
+                return RawMessageCodec.CreateFileSystemBacked(capture, _options, relative);
+            }
+
+            return RawMessageCodec.CreateFileSystemBacked(capture, _options, _paths.GetRelativePath(emailId));
+        }
 
         /// <summary>
         /// Writes the message file. The row already carries the path, so a failure here leaves a
@@ -50,6 +58,20 @@ namespace MailArchiver.Services.Shared
             if (!string.IsNullOrEmpty(directory))
             {
                 Directory.CreateDirectory(directory);
+            }
+
+            // A hash-named file is written once. If it is already there (the same bytes arrived
+            // before), it must hold exactly these bytes; it is verified, never overwritten.
+            if (_options.FileSystem.HashNamed && File.Exists(absolute))
+            {
+                var existing = RawMessageCodec.Decompress(await File.ReadAllBytesAsync(absolute), row.Size);
+                if (!string.Equals(RawMessageCodec.ComputeSha256(existing), row.Sha256, StringComparison.Ordinal))
+                {
+                    throw new IOException(
+                        $"The existing original at {absolute} does not match its own name; refusing to overwrite it.");
+                }
+
+                return;
             }
 
             var compressed = RawMessageCodec.Compress(capture.Bytes);

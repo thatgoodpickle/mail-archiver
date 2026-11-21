@@ -328,6 +328,7 @@ complete original is stored as well.
 | `RawMessages__IncludeGraph` | `true` | Also store originals for Microsoft 365 (Graph) accounts. |
 | `RawMessages__FileSystem__BasePath` | `RawMessages` | Directory for the message files. Must point at a mounted volume in Docker. |
 | `RawMessages__FileSystem__ShardDepth` | `2` | Directory levels the email id is spread over. |
+| `RawMessages__FileSystem__HashNamed` | `false` | Fork option: name originals by their SHA-256 instead of the email id (see the original message storage page). |
 | `RawMessages__FileSystem__VerifyChecksumOnRead` | `true` | Verify the SHA-256 on every download. |
 | `RawMessages__FileSystem__OrphanCleanupEnabled` | `true` | Remove message files that no email refers to. |
 | `RawMessages__FileSystem__OrphanCleanupIntervalHours` | `24` | How often that sweep runs. |

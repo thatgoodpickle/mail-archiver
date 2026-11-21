@@ -71,6 +71,7 @@ All settings live in the `RawMessages` section, or as environment variables with
 | `RawMessages:Storage` | `postgres` | Where the message bytes are kept: `postgres` (in the database) or `filesystem` (gzip file next to the archive). See [Storage backend](#storage-backend). |
 | `RawMessages:FileSystem:BasePath` | `RawMessages` | Directory the message files are written to, relative to the application's content root. Point this at a mounted volume in Docker. |
 | `RawMessages:FileSystem:ShardDepth` | `2` | Number of two-character directory levels the email id is spread over. `2` gives 10,000 directories, `0` is flat. Keeps the per-directory file count low on large archives. |
+| `RawMessages:FileSystem:HashNamed` | `false` | Fork option. Names each original by its SHA-256 (`ab/cd/<sha256>.eml.gz`) instead of the email id. The hash identifies the original, byte-identical originals share one file, and a file is written once and verified rather than overwritten. Files named this way are never deleted automatically. Existing id-named rows stay readable. |
 | `RawMessages:FileSystem:VerifyChecksumOnRead` | `true` | Re-compute the SHA-256 of the file on every download and compare it with the checksum recorded at archive time. A mismatch fails the download with HTTP 500 instead of serving altered bytes. |
 
 ### Sizing
