@@ -22,6 +22,7 @@ public class EmailsApiController : ApiControllerBase
     private readonly IAuthenticationService _authService;
     private readonly DateTimeHelper _dateTimeHelper;
     private readonly IRawMessageStore _rawMessageStore;
+    private readonly IStrippedContentHydrator? _contentHydrator;
 
     public EmailsApiController(
         MailArchiverDbContext context,
@@ -30,8 +31,10 @@ public class EmailsApiController : ApiControllerBase
         IAccessLogService accessLogService,
         IAuthenticationService authService,
         DateTimeHelper dateTimeHelper,
-        IRawMessageStore rawMessageStore)
+        IRawMessageStore rawMessageStore,
+        IStrippedContentHydrator? contentHydrator = null)
     {
+        _contentHydrator = contentHydrator;
         _context = context;
         _emailCoreService = emailCoreService;
         _options = options.Value;
@@ -130,6 +133,13 @@ public class EmailsApiController : ApiControllerBase
 
         var hasRawMessage = await _rawMessageStore.ExistsAsync(email.Id);
 
+        // Lean-stored: restore the HTML/full text bodies from the original; attachment bytes are
+        // not needed for the detail (names and sizes come from the database).
+        if (email.ContentStripped && _contentHydrator != null)
+        {
+            await _contentHydrator.HydrateAsync(email, _ => false);
+        }
+
         return Ok(EmailDetailDto.FromEntity(email, hasRawMessage));
     }
 
@@ -157,6 +167,11 @@ public class EmailsApiController : ApiControllerBase
         }
 
         await _accessLogService.LogAccessAsync(CurrentUsername, AccessLogType.Download, emailId: id);
+
+        if (email.ContentStripped && _contentHydrator != null)
+        {
+            await _contentHydrator.HydrateAsync(email);
+        }
 
         var message = ArchivedEmailMimeBuilder.Build(email, _dateTimeHelper);
         return File(RawMessageCodec.Serialize(message), "message/rfc822", $"email-{id}.eml");
@@ -231,6 +246,11 @@ public class EmailsApiController : ApiControllerBase
         }
 
         await _accessLogService.LogAccessAsync(CurrentUsername, AccessLogType.Download, emailId: id);
+
+        if (att.ArchivedEmail.ContentStripped && _contentHydrator != null)
+        {
+            await _contentHydrator.HydrateAttachmentAsync(att);
+        }
 
         return File(att.Content, att.ContentType, att.FileName);
     }

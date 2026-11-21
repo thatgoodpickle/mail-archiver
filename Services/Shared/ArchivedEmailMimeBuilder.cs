@@ -14,6 +14,15 @@ namespace MailArchiver.Services.Shared
     {
         public static MimeMessage Build(ArchivedEmail email, DateTimeHelper dateTimeHelper)
         {
+            // A lean-stored email keeps its HTML body and attachments only in the original.
+            // Rebuilding from the (emptied) fields would silently produce a message without them,
+            // so refuse; callers hydrate the email first (IStrippedContentHydrator) or use the original.
+            if (email.ContentStripped)
+            {
+                throw new InvalidOperationException(
+                    $"Email {email.Id} is stored lean; its content must be restored from the original before a message can be built.");
+            }
+
             var message = new MimeMessage();
 
             // Set headers. Apply the stored Message-ID only when it normalizes to a usable

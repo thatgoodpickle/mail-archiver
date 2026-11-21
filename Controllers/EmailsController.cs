@@ -41,6 +41,7 @@ namespace MailArchiver.Controllers
         private readonly DeletionPolicyOptions _deletionPolicy;
         private readonly RawMessageOptions _rawMessageOptions;
         private readonly IRawMessageStore? _rawMessageStore;
+        private readonly IStrippedContentHydrator? _contentHydrator;
 
         public EmailsController(
             MailArchiverDbContext context,
@@ -62,9 +63,11 @@ namespace MailArchiver.Controllers
             MailArchiver.Services.IAuthenticationService? authService = null,
             IEmailDeletionService? emailDeletionService = null,
             IOptions<RawMessageOptions>? rawMessageOptions = null,
-            IRawMessageStore? rawMessageStore = null)
+            IRawMessageStore? rawMessageStore = null,
+            IStrippedContentHydrator? contentHydrator = null)
 
         {
+            _contentHydrator = contentHydrator;
             _context = context;
             _emailCoreService = emailCoreService;
             _providerFactory = providerFactory;
@@ -377,6 +380,25 @@ namespace MailArchiver.Controllers
                 .ToListAsync();
         }
 
+        // Lean storage: a stripped email keeps its HTML body and attachment bytes only in the stored
+        // original. These helpers fill them in (detached, in memory) before a view, download or
+        // restore uses them; for ordinary emails they do nothing.
+        private async Task HydrateLeanAsync(ArchivedEmail email, Func<EmailAttachment, bool>? attachmentFilter = null)
+        {
+            if (!email.ContentStripped) return;
+            if (_contentHydrator == null)
+                throw new InvalidOperationException("Lean-stored email but no content hydrator is registered.");
+            await _contentHydrator.HydrateAsync(email, attachmentFilter);
+        }
+
+        private async Task HydrateLeanAsync(EmailAttachment attachment)
+        {
+            if (attachment.ArchivedEmail != null && !attachment.ArchivedEmail.ContentStripped) return;
+            if (_contentHydrator == null)
+                throw new InvalidOperationException("Lean-stored email but no content hydrator is registered.");
+            await _contentHydrator.HydrateAttachmentAsync(attachment);
+        }
+
         // GET: Emails/Details/5
         [EmailAccessRequired]
         public async Task<IActionResult> Details(int id, string returnUrl = null)
@@ -394,6 +416,8 @@ namespace MailArchiver.Controllers
                 _logger.LogWarning("Email with ID {EmailId} not found", id);
                 return View("Details404");
             }
+
+            await HydrateLeanAsync(email, a => !string.IsNullOrEmpty(a.ContentId));
 
             _logger.LogInformation("Found email with ID {EmailId} from account {AccountId}", 
                 id, email.MailAccountId);
@@ -546,6 +570,8 @@ namespace MailArchiver.Controllers
                 return View("Details404");
             }
 
+            await HydrateLeanAsync(attachment);
+
             return File(attachment.Content, attachment.ContentType, attachment.FileName);
         }
 
@@ -563,6 +589,8 @@ namespace MailArchiver.Controllers
                 _logger.LogWarning("Attachment with ID {AttachmentId} for email {EmailId} not found", attachmentId, emailId);
                 return View("Details404");
             }
+
+            await HydrateLeanAsync(attachment);
 
             // For PDF files, we need to ensure they can be displayed inline
             if (attachment.ContentType == "application/pdf")
@@ -600,6 +628,8 @@ namespace MailArchiver.Controllers
                 _logger.LogWarning("Attachment with ID {AttachmentId} for email {EmailId} not found", attachmentId, emailId);
                 return View("Details404");
             }
+
+            await HydrateLeanAsync(attachment);
 
             var ct = (attachment.ContentType ?? string.Empty).ToLowerInvariant();
             var isIcs = ct.StartsWith("text/calendar", StringComparison.OrdinalIgnoreCase)
@@ -764,6 +794,8 @@ namespace MailArchiver.Controllers
                 _logger.LogWarning("Email with ID {EmailId} not found", id);
                 return View("Details404");
             }
+
+            await HydrateLeanAsync(email);
 
             // Check if email has attachments
             if (!email.Attachments.Any())
@@ -1177,6 +1209,7 @@ namespace MailArchiver.Controllers
                         return RedirectToAction(nameof(Details), new { id = model.EmailId });
                     }
                     
+                    await HydrateLeanAsync(email);
                     result = await _graphEmailService.RestoreEmailToFolderAsync(email, targetAccount, model.TargetFolder, model.PreserveFolderStructure);
                 }
                 else
@@ -1691,6 +1724,7 @@ namespace MailArchiver.Controllers
                                 continue;
                             }
                             
+                            await HydrateLeanAsync(email);
                             var result = await _graphEmailService.RestoreEmailToFolderAsync(email, targetAccount, model.TargetFolder, model.PreserveFolderStructure);
                             if (result)
                             {
@@ -2784,6 +2818,8 @@ namespace MailArchiver.Controllers
                 _logger.LogWarning("Email with ID {EmailId} not found", id);
                 return View("Details404");
             }
+
+            await HydrateLeanAsync(email, a => !string.IsNullOrEmpty(a.ContentId));
 
             // Use original body if available (preserves null bytes and truncation), with fallback to untruncated and regular body
             // Priority: OriginalBody (bytes with nulls/truncation) > BodyUntruncated (legacy) > Body

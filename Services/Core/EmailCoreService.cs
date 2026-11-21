@@ -30,6 +30,7 @@ namespace MailArchiver.Services.Core
         private readonly RawMessageOptions _rawMessageOptions;
         private readonly IRawMessageStore? _rawMessageStore;
         private readonly IMetricsRecorder? _metricsRecorder;
+        private readonly IStrippedContentHydrator? _contentHydrator;
 
         public EmailCoreService(
             MailArchiverDbContext context,
@@ -40,7 +41,8 @@ namespace MailArchiver.Services.Core
             IMemoryCache? memoryCache = null,
             IOptions<RawMessageOptions>? rawMessageOptions = null,
             IRawMessageStore? rawMessageStore = null,
-            IMetricsRecorder? metricsRecorder = null)
+            IMetricsRecorder? metricsRecorder = null,
+            IStrippedContentHydrator? contentHydrator = null)
         {
             _context = context;
             _logger = logger;
@@ -50,6 +52,7 @@ namespace MailArchiver.Services.Core
             _memoryCache = memoryCache ?? new MemoryCache(new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions());
             _rawMessageOptions = rawMessageOptions?.Value ?? new RawMessageOptions();
             _metricsRecorder = metricsRecorder;
+            _contentHydrator = contentHydrator;
 
             // Tests and the CLI construct this service without a store; fall back to the
             // Postgres backend, which is what the archive did before storage was pluggable.
@@ -600,6 +603,15 @@ namespace MailArchiver.Services.Core
                         return new EmailExportResult(
                             original.Bytes, true, original.Source, original.Sha256, original.StorageType);
                     }
+                }
+
+                // Lean-stored email without a usable original: fill the content in from the original
+                // (throws if it is gone) instead of exporting a message without its attachments.
+                if (email.ContentStripped)
+                {
+                    if (_contentHydrator == null)
+                        throw new InvalidOperationException("Lean-stored email but no content hydrator is registered.");
+                    await _contentHydrator.HydrateAsync(email);
                 }
 
                 await ExportSingleEmailAsEml(email, ms);

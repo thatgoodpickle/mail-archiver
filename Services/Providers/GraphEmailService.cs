@@ -1,3 +1,4 @@
+using MailArchiver.Services.Shared;
 using MailArchiver.Data;
 using MailArchiver.Models;
 using MailArchiver.Services.Core;
@@ -20,6 +21,7 @@ namespace MailArchiver.Services.Providers
         private readonly IGraphFolderService _folderService;
         private readonly EmailCoreService _coreService;
         private readonly MailArchiverDbContext _context;
+        private readonly IStrippedContentHydrator? _contentHydrator;
 
         public GraphEmailService(
             GraphMailSyncService syncService,
@@ -27,8 +29,10 @@ namespace MailArchiver.Services.Providers
             GraphAuthClientFactory authFactory,
             IGraphFolderService folderService,
             EmailCoreService coreService,
-            MailArchiverDbContext context)
+            MailArchiverDbContext context,
+            IStrippedContentHydrator? contentHydrator = null)
         {
+            _contentHydrator = contentHydrator;
             _syncService = syncService;
             _restorer = restorer;
             _authFactory = authFactory;
@@ -102,6 +106,15 @@ namespace MailArchiver.Services.Providers
             var targetAccount = await _context.MailAccounts.FindAsync(targetAccountId);
             if (targetAccount == null)
                 return false;
+
+            // Lean-stored emails keep HTML and attachments only in the original; restore them in
+            // memory first so the Graph message is complete (throws if the original is gone).
+            if (email.ContentStripped)
+            {
+                if (_contentHydrator == null)
+                    throw new InvalidOperationException("Lean-stored email but no content hydrator is registered.");
+                await _contentHydrator.HydrateAsync(email);
+            }
 
             return await _restorer.RestoreEmailToFolderAsync(email, targetAccount, folderName, preserveFolderStructure);
         }

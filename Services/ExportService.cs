@@ -774,8 +774,19 @@ namespace MailArchiver.Services
             await writer.FlushAsync();
         }
 
-        private Task<MimeMessage> CreateMimeMessageFromArchived(ArchivedEmail email, DateTimeHelper dateTimeHelper)
-            => Task.FromResult(ArchivedEmailMimeBuilder.Build(email, dateTimeHelper));
+        private async Task<MimeMessage> CreateMimeMessageFromArchived(ArchivedEmail email, DateTimeHelper dateTimeHelper)
+        {
+            // Lean-stored emails keep HTML and attachments only in the original: restore them in
+            // memory first. The job's own context only reads, so nothing is ever saved back.
+            if (email.ContentStripped)
+            {
+                using var scope = _serviceProvider.CreateScope();
+                await scope.ServiceProvider.GetRequiredService<MailArchiver.Services.Shared.IStrippedContentHydrator>()
+                    .HydrateAsync(email);
+            }
+
+            return ArchivedEmailMimeBuilder.Build(email, dateTimeHelper);
+        }
 
 
         private string CreateMBoxFromLine(ArchivedEmail email)

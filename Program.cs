@@ -497,6 +497,8 @@ builder.Services.AddScoped<MailArchiver.Services.Shared.IRawMessageStore,
     MailArchiver.Services.Shared.RawMessageStoreRouter>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.IOriginalMessageReader,
     MailArchiver.Services.Shared.OriginalMessageReader>();
+builder.Services.AddScoped<MailArchiver.Services.Shared.IStrippedContentHydrator,
+    MailArchiver.Services.Shared.StrippedContentHydrator>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.RawMessageStorageMigrator>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.RawMessageOrphanCollector>();
 builder.Services.AddHostedService<MailArchiver.Services.RawMessageOrphanCleanupService>();
