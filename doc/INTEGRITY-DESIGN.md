@@ -114,14 +114,22 @@ Postgres). Behind a flag (`Storage:Mode=Lean`) so upstream merges stay possible.
     (processing is shared even though the files are not de-duplicated). Resumable.
   - Step 1, always: read the text layer directly (PDF/Word/Excel) with no OCR. Step 2, only
     for pages with no usable text (scans, photos): OCR.
-  - Setting `Ocr:Mode = off | cpu | gpu` plus `Ocr:Device`. One classic engine for both
-    devices: PaddleOCR models through ONNX Runtime (CPU build in the default image; a
-    CUDA build as a separate image tag, needs NVIDIA driver + container toolkit on the host).
-    Tesseract is CPU-only (no real GPU mode), so it is only a fallback/baseline. Bundled in
-    the app image, no external service; run as a second container of the same image, no
-    network, originals mounted read-only, time/memory limits.
-  - GPU target: the T1000 8 GB passed through to the clio VM (IOMMU/VFIO on Hades, driver in
-    the VM, backup/restore test of the VM with passthrough). Not needed for cpu mode.
+  - Setting `Ocr:Mode = off | cpu | gpu`. GPU-vendor agnostic (decided 2026-11-21): the code
+    talks only to an execution-provider setting `Ocr:Provider = auto | cpu | cuda | rocm |
+    openvino | ...`, never to one vendor. One classic engine for all devices: PaddleOCR
+    models through ONNX Runtime, which has CPU, NVIDIA CUDA, AMD ROCm and Intel OpenVINO
+    providers (availability per platform to be verified at build time). The default image is
+    the CPU build; GPU builds are separate image tags per vendor (e.g. `-cuda`, `-rocm`,
+    `-openvino`), each needing that vendor's driver/runtime on the host. If the chosen
+    provider is not available the worker logs it and falls back to cpu. Vendor-neutral escape
+    hatch: an optional OCR HTTP address (any machine/GPU/server that returns text), which is
+    also where a future LLM engine would plug in. Tesseract is CPU-only (no real GPU mode), so
+    it is only a fallback/baseline. Bundled in the app image, no external service; run as a
+    second container of the same image, no network, originals mounted read-only, time/memory
+    limits.
+  - Hardware today (example only, not a requirement): a T1000 8 GB (NVIDIA) that could be
+    passed through to the clio VM (IOMMU/VFIO on Hades, driver in the VM, backup/restore
+    test of the VM with passthrough). Not needed for cpu mode.
   - Record engine + version + time per extracted text so it can be re-run with a better
     engine and the text replaced.
   - Open points: confirm a maintained .NET path for PaddleOCR-ONNX (else a small helper
