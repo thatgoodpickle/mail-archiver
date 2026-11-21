@@ -73,6 +73,22 @@ Postgres). Behind a flag (`Storage:Mode=Lean`) so upstream merges stay possible.
   file path, hash, a short preview, and per attachment: name, size, hash (no bytes).
   Search = Postgres full-text word index built from subject, addresses and body text; no
   stored body text. The index is derived and can be rebuilt from the originals.
+  Search behaviour (corrected 2026-11-21): upstream uses `to_tsvector('simple', ...)` /
+  `to_tsquery('simple', ...)` (EmailFilterSql.cs): whole words and prefixes, no stemming, not
+  substring matching. The earlier claim that it finds partial words was wrong. The `simple`
+  configuration avoids language-specific stemming (names, Vietnamese, Korean). Open
+  question before coding: whether upstream stores the vector or builds it from `Body` at
+  query time; if the latter, lean mode needs a stored vector column (tsvector is capped at
+  about 1 MB per value, so very long bodies must be truncated for indexing only).
+- **What the screen shows:** the email body, headers and attachments always come from the
+  original (unpacked and read on demand; HTML sanitised as upstream does, so what is shown is
+  the original rendered, never altered; the raw `.eml` is always downloadable). The database
+  feeds only search and the list rows (sender, subject, date, size, folder, preview). List
+  rows are a convenience, not evidence: a database edit could change a list value without
+  touching the original, so verify-all rebuilds every index card from its original and flags
+  any difference. Rule: the original is the evidence; the database is a rebuildable lookup
+  layer. Backups matter most for the originals, since the database can be rebuilt from them
+  but they cannot be rebuilt from the database.
 - **Showing an email / downloading an attachment:** decompress the one original in memory
   and cut the part out; small cache of recently opened items, no permanent second copy.
   Lists and search never open files.
