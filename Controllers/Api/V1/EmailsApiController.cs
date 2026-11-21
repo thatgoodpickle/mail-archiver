@@ -23,6 +23,7 @@ public class EmailsApiController : ApiControllerBase
     private readonly DateTimeHelper _dateTimeHelper;
     private readonly IRawMessageStore _rawMessageStore;
     private readonly IStrippedContentHydrator? _contentHydrator;
+    private readonly IIntegrityService? _integrityService;
 
     public EmailsApiController(
         MailArchiverDbContext context,
@@ -32,9 +33,11 @@ public class EmailsApiController : ApiControllerBase
         IAuthenticationService authService,
         DateTimeHelper dateTimeHelper,
         IRawMessageStore rawMessageStore,
-        IStrippedContentHydrator? contentHydrator = null)
+        IStrippedContentHydrator? contentHydrator = null,
+        IIntegrityService? integrityService = null)
     {
         _contentHydrator = contentHydrator;
+        _integrityService = integrityService;
         _context = context;
         _emailCoreService = emailCoreService;
         _options = options.Value;
@@ -224,6 +227,40 @@ public class EmailsApiController : ApiControllerBase
         Response.Headers["X-Raw-Message-Source"] = content.Source;
         Response.Headers["X-Raw-Message-Storage"] = content.StorageType;
         return File(content.Bytes, "message/rfc822", $"email-{id}-original.eml");
+    }
+
+    // Proves the email against its stored original: re-hashes the original and re-derives the
+    // database copy from it. Status is one of Valid, Invalid, Missing, NotStored, Inconsistent.
+    [HttpGet("{id:int}/integrity")]
+    public async Task<IActionResult> GetIntegrity(int id)
+    {
+        if (_integrityService == null)
+        {
+            return Problem(statusCode: 501, title: "Integrity verification is not available.");
+        }
+
+        var allowed = await GetAllowedAccountIdsAsync();
+        var accountId = await _context.ArchivedEmails
+            .Where(e => e.Id == id)
+            .Select(e => (int?)e.MailAccountId)
+            .FirstOrDefaultAsync();
+
+        if (accountId == null || (allowed != null && !allowed.Contains(accountId.Value)))
+        {
+            return NotFound();
+        }
+
+        var report = await _integrityService.VerifyAsync(id);
+        return Ok(new
+        {
+            emailId = report.EmailId,
+            status = report.Status.ToString(),
+            sha256 = report.Sha256,
+            source = report.Source,
+            storage = report.StorageType,
+            lean = report.Lean,
+            findings = report.Findings
+        });
     }
 
     [HttpGet("{id:int}/attachments/{attachmentId:int}")]
