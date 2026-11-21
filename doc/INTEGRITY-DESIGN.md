@@ -107,12 +107,34 @@ Postgres). Behind a flag (`Storage:Mode=Lean`) so upstream merges stay possible.
   In-app viewer shows only safe types (PDF, images, plain text) sandboxed; everything else
   is download-only. Reuses upstream AttachmentPreview/File() code with a new byte source.
   To check at build time: the interface has no email edit/delete actions beyond this rule.
-- **Attachment text / OCR (later, optional):** a separate asynchronous job extracts text
-  (PDF/Word first, OCR after) and adds it to the search index keyed by attachment hash.
-  Never blocks archiving; the text is derived and rebuildable. Intended OCR engine: a GPU
-  service (PaddleOCR/docTR) using the T1000 8 GB passed through to the clio VM; Tesseract
-  (Tika) has no GPU mode. Needs IOMMU/VFIO on Hades, driver + container toolkit in the VM,
-  a backup/restore test of the VM with passthrough.
+- **Attachment text / OCR (later, optional; decided 2026-11-21):**
+  - Separate asynchronous worker; never blocks archiving; text is derived, rebuildable and
+    only ever indexed (never fed to an agent that can act: scanned content is untrusted).
+  - Queue keyed by attachment SHA-256, so an attachment seen in many emails is read once
+    (processing is shared even though the files are not de-duplicated). Resumable.
+  - Step 1, always: read the text layer directly (PDF/Word/Excel) with no OCR. Step 2, only
+    for pages with no usable text (scans, photos): OCR.
+  - Setting `Ocr:Mode = off | cpu | gpu` plus `Ocr:Device`. One classic engine for both
+    devices: PaddleOCR models through ONNX Runtime (CPU build in the default image; a
+    CUDA build as a separate image tag, needs NVIDIA driver + container toolkit on the host).
+    Tesseract is CPU-only (no real GPU mode), so it is only a fallback/baseline. Bundled in
+    the app image, no external service; run as a second container of the same image, no
+    network, originals mounted read-only, time/memory limits.
+  - GPU target: the T1000 8 GB passed through to the clio VM (IOMMU/VFIO on Hades, driver in
+    the VM, backup/restore test of the VM with passthrough). Not needed for cpu mode.
+  - Record engine + version + time per extracted text so it can be re-run with a better
+    engine and the text replaced.
+  - Open points: confirm a maintained .NET path for PaddleOCR-ONNX (else a small helper
+    program in the image); measure first how many attachments have no text layer (attachment
+    type/size counts, no mail reading); compare engines on ~20 of the user's own scans.
+  - Privacy note: OCR of IDs/passports puts that text in the search index in the clear.
+  - FUTURE (not part of the first build, deliberately left out): optional vision-LLM engine
+    as an HTTP address (Ollama or any OpenAI-style server) with a vision model, used as a
+    second pass for pages where classic OCR gave poor results. Needs: shared page-to-image
+    step, address/model/timeout/concurrency settings, image resizing, output sanity checks
+    (runaway/empty/commentary), a "poor result" rule, and sandboxing. Expected slower per page
+    than classic OCR on the T1000 but better on tables/handwriting/skewed photos; can invent
+    text, so only ever an index aid. Decide after comparing with classic OCR on real scans.
 - **Later option: skeleton layer** to regain attachment de-dup: store the original with
   attachment bodies replaced by hash references into a content-addressed store; reassemble
   byte-exact; verify the reassembled SHA-256 at save time and fall back to whole storage on
