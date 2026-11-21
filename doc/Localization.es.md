@@ -88,7 +88,7 @@ Reglas que se derivan de cómo .NET resuelve los recursos aquí:
    y un `<option>` en el menú desplegable de idiomas en
    `Views/Shared/_UserInfo.cshtml`. Sin las dos últimas, el archivo nunca se utiliza.
 
-Consulta [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md)
+Consulta [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md)
 para conocer el proceso de contribución, los estándares de codificación y cómo enviar un pull request.
 
 ## 🔗 Documentación relacionada {#related-documentation}

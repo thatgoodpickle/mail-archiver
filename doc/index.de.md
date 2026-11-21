@@ -392,5 +392,5 @@ Einmal einrichten, jede Nachricht behalten und sie Jahre später wiederfinden.
 <div class="docs-footer-note" markdown>
 :material-pencil: **Diese Dokumentation wird kontinuierlich erweitert.**
 Wenn Sie einen Fehler finden oder einen Vorschlag haben, bitte
-[ein Issue eröffnen](https://github.com/s1t5/mail-archiver/issues) oder einen Pull Request einreichen.
+[ein Issue eröffnen](https://github.com/thatgoodpickle/mail-archiver/issues) oder einen Pull Request einreichen.
 </div>

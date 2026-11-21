@@ -88,7 +88,7 @@ Rules that follow from how .NET resolves resources here:
    and an `<option>` in the language dropdown in
    `Views/Shared/_UserInfo.cshtml`. Without the last two the file is never used.
 
-See [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md)
+See [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md)
 for the contribution process, coding standards and how to submit a pull request.
 
 ## 🔗 Related Documentation

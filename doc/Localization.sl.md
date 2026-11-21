@@ -57,7 +57,7 @@ Pravila, ki izhajajo iz načina, kako .NET tukaj razrešuje vire:
 3. **`en-GB` je po zasnovi delno prepričanje (override).** Definira le 245 od 1148 ključev in ostale črpi iz nevtralne angleške datoteke — zato besedilo zveni kot angleščina, razen tam, kjer se razlikuje britanski slog ali formati datumov. Kitajski (poenostavljen), nemški, španski, francozski, madžarski, italijanski, japonski, nizozemski, poljski, portugalski (Brazil) in ruski ter slovenščina so trenutno popolni.
 4. **Dodajanje celotnega jezika** zahteva tri stvari: novo `SharedResource.<culture>.resx`, vnos v seznam kultur v `Program.cs` (`UseRequestLocalization` → `AddSupportedCultures` / `AddSupportedUICultures`) in `<option>` v spustnem meniju jezika v `Views/Shared/_UserInfo.cshtml`. Brez zadnjih dveh datoteka nikoli ni v uporabi.
 
-Za postopek prispevanja, standarde kodiranja in navodila za oddajo pull requesta si oglejte [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md).
+Za postopek prispevanja, standarde kodiranja in navodila za oddajo pull requesta si oglejte [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md).
 
 ## 🔗 Sorodna dokumentacija {#related-documentation}
 

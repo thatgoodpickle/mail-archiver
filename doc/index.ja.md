@@ -392,5 +392,5 @@
 <div class="docs-footer-note" markdown>
 :material-pencil: **このドキュメントは継続的に拡張されています。**
 間違いを見つけた場合や提案がある場合は、
-[open an issue](https://github.com/s1t5/mail-archiver/issues) するか、プルリクエストを送信してください。
+[open an issue](https://github.com/thatgoodpickle/mail-archiver/issues) するか、プルリクエストを送信してください。
 </div>

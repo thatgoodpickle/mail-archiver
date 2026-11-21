@@ -88,7 +88,7 @@ Regras que derivam de como o .NET resolve os recursos aqui:
    e um `<option>` no menu suspenso de idiomas em
    `Views/Shared/_UserInfo.cshtml`. Sem os dois últimos, o arquivo nunca é usado.
 
-Veja [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md)
+Veja [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md)
 para o processo de contribuição, padrões de codificação e como enviar um pull request.
 
 ## 🔗 Documentação Relacionada {#related-documentation}

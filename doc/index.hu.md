@@ -392,5 +392,5 @@ Amit a Yahoo IMAP és export végpontjai nem tesznek meg.
 <div class="docs-footer-note" markdown>
 :material-pencil: **Ezt a dokumentációt folyamatosan bővítjük.**
 Ha hibát talál, vagy javaslatot szeretne tenni, kérjük
-[nyisson meg egy issue-t](https://github.com/s1t5/mail-archiver/issues) vagy küldjön pull request-et.
+[nyisson meg egy issue-t](https://github.com/thatgoodpickle/mail-archiver/issues) vagy küldjön pull request-et.
 </div>

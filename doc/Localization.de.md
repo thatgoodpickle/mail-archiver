@@ -88,7 +88,7 @@ Regeln, die sich aus der Art und Weise ergeben, wie .NET Ressourcen hier auflös
    und ein `<option>` im Sprach-Dropdown in
    `Views/Shared/_UserInfo.cshtml`. Ohne die letzten beiden wird die Datei nie verwendet.
 
-Siehe [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md)
+Siehe [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md)
 für den Mitwirkungsprozess, Codierungsstandards und wie Sie einen Pull Request einreichen.
 
 ## 🔗 Verwandte Dokumentation {#related-documentation}

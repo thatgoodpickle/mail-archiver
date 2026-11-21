@@ -393,5 +393,5 @@ Stel het eenmalig in, bewaar elk bericht en vind het jaren later weer terug.
 
 <div class="docs-footer-note" markdown>
 :material-pencil: **Deze documentatie wordt continu uitgebreid.**
-Als je een fout vindt of een suggestie hebt, [open dan een issue](https://github.com/s1t5/mail-archiver/issues) of dien een pull request in.
+Als je een fout vindt of een suggestie hebt, [open dan een issue](https://github.com/thatgoodpickle/mail-archiver/issues) of dien een pull request in.
 </div>

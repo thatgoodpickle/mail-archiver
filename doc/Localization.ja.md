@@ -57,7 +57,7 @@ Mail Archiverのインターフェースは**14言語**で利用可能です。�
 3. **`en-GB` は設計上、部分的なオーバーライドです。** これは1148個のキーのうち245個のみを定義しており、残りは中立的な英語ファイルから継承しています。そのため、イギリス英語の表現や日付形式が異なる部分を除き、英語のように見えます。中国語（簡体字）、ドイツ語、スペイン語、フランス語、ハンガリー語、イタリア語、日本語、オランダ語、ポーランド語、ポルトガル語（ブラジル）、ロシア語、スロベニア語は、現在完全な状態です。
 4. **言語全体を追加する場合**には、3つの要素が必要です：新しい `SharedResource.<culture>.resx`、`Program.cs` 内のカルチャリストへのエントリ (`UseRequestLocalization` → `AddSupportedCultures` / `AddSupportedUICultures`)、および `Views/Shared/_UserInfo.cshtml` の言語ドロップダウンにおける `<option>`。これら2つがないと、ファイルは使用されません。
 
-コントリビューションのプロセス、コーディング標準、およびプルリクエストの送信方法については、[CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md) を参照してください。
+コントリビューションのプロセス、コーディング標準、およびプルリクエストの送信方法については、[CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md) を参照してください。
 
 ## 🔗 関連ドキュメント {#related-documentation}
 

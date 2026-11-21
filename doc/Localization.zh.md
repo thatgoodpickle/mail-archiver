@@ -57,7 +57,7 @@ Mail Archiver 界面支持 **14 种语言**。语言是存储在 Cookie 中的**
 3. **设计上，`en-GB` 是部分覆盖。** 它仅定义了 1148 个键中的 245 个，并从英文中性文件继承其余部分 —— 这就是为什么除了英式用语或日期格式不同外，它读起来很像英文。目前，中文（简体）、德语、西班牙语、法语、匈牙利语、意大利语、日语、荷兰语、波兰语、葡萄牙语（巴西）、俄语和斯洛文尼亚语已实现完整翻译。
 4. **添加完整语言**需要三件事：一个新的 `SharedResource.<culture>.resx`、在 `Program.cs` 的文化列表中添加条目（`UseRequestLocalization` → `AddSupportedCultures` / `AddSupportedUICultures`），以及在 `Views/Shared/_UserInfo.cshtml` 的语言下拉菜单中添加 `<option>`。如果没有后两项，该文件将永远不会被使用。
 
-有关贡献流程、编码标准以及如何提交 Pull Request，请参阅 [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md)。
+有关贡献流程、编码标准以及如何提交 Pull Request，请参阅 [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md)。
 
 ## 🔗 相关文档 {#related-documentation}
 

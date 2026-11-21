@@ -393,5 +393,5 @@
 <div class="docs-footer-note" markdown>
 :material-pencil: **Эта документация постоянно расширяется.**
 Если вы заметили ошибку или у вас есть предложение, пожалуйста,
-[open an issue](https://github.com/s1t5/mail-archiver/issues) или отправьте pull request.
+[open an issue](https://github.com/thatgoodpickle/mail-archiver/issues) или отправьте pull request.
 </div>

@@ -87,7 +87,7 @@ Regels die voortvloeien uit de manier waarop .NET resources hier oplost:
    en een `<option>` in het taaldropdownmenu in
    `Views/Shared/_UserInfo.cshtml`. Zonder de laatste twee wordt het bestand nooit gebruikt.
 
-Zie [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md)
+Zie [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md)
 voor het bijdrageproces, codestandaarden en hoe je een pull request indient.
 
 ## 🔗 Gerelateerde documentatie {#related-documentation}

@@ -67,7 +67,7 @@
    и `<option>` в выпадающем списке языков в
    `Views/Shared/_UserInfo.cshtml`. Без последних двух файл никогда не будет использован.
 
-См. [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md)
+См. [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md)
 для ознакомления с процессом внесения вклада, стандартами кодирования и тем, как отправить pull request.
 
 ## 🔗 Связанная документация {#related-documentation}

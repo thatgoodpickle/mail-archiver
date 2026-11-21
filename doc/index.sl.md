@@ -392,5 +392,5 @@ Namestite enkrat, shranite vsako sporočilo in ga ponovno najdite čez leta.
 <div class="docs-footer-note" markdown>
 :material-pencil: **Ta dokumentacija se nenehno širi.**
 Če opazite napako ali imate predlog, prosimo
-[odprite težavo](https://github.com/s1t5/mail-archiver/issues) ali pošljite pull request.
+[odprite težavo](https://github.com/thatgoodpickle/mail-archiver/issues) ali pošljite pull request.
 </div>

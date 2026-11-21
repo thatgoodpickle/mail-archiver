@@ -16,7 +16,7 @@
   <a href="https://ko-fi.com/s1t5dev" target="_blank"><img src="https://img.shields.io/badge/Ko--Fi-s1t5dev-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Ko-fi"></a>
 </div>
 
-![Mail-Archiver Dashboard](https://github.com/s1t5/mail-archiver/blob/main/Screenshots/dashboard.jpg?raw=true)
+![Mail-Archiver Dashboard](https://github.com/thatgoodpickle/mail-archiver/blob/main/Screenshots/dashboard.jpg?raw=true)
 
 ## ✨ Key Features
 

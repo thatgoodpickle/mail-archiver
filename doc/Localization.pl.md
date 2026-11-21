@@ -85,7 +85,7 @@ Zasady wynikające ze sposobu, w jaki .NET rozwiązuje zasoby w tym miejscu:
    oraz `<option>` w rozwijanej liście języków w
    `Views/Shared/_UserInfo.cshtml`. Bez dwóch ostatnich plik nigdy nie zostanie użyty.
 
-Szczegóły dotyczące procesu współtworzenia, standardów kodowania i sposobu przesyłania pull requestów znajdziesz w [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md).
+Szczegóły dotyczące procesu współtworzenia, standardów kodowania i sposobu przesyłania pull requestów znajdziesz w [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md).
 
 ## 🔗 Powiązana dokumentacja {#related-documentation}
 

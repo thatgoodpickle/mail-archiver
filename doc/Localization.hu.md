@@ -57,7 +57,7 @@ A .NET erőforrásfeloldási mechanizmusából fakadó szabályok:
 3. **A `en-GB` tervezés szerinti részleges felülbírálás.** Ez csak a 1148 kulcs közül 245-öt határoz meg, és a tö 나머it a semleges angol fájltól örökli — ezért olvasható angolul, kivéve ott, ahol a brit szóhasználat vagy a dátumformátum eltér. A kínai (egyszerűsített), német, spanyol, francia, magyar, olasz, japán, holland, lengyel, portugál (brazil), orosz és szlovén nyelvek jelenleg teljes egészében elérhetőek.
 4. **Egy teljes nyelv hozzáadása** három dolgot igényel: egy új `SharedResource.<culture>.resx`-ot, egy bejegyzést a kultúra listában a `Program.cs` fájlban (`UseRequestLocalization` → `AddSupportedCultures` / `AddSupportedUICultures`), és egy `<option>`-et a nyelvválasztóban a `Views/Shared/_UserInfo.cshtml` fájlban. Ezek nélkül szemben a fájl sosem kerül felhasználásra.
 
-Lásd a [CONTRIBUTING.md](https://github.com/s1t5/mail-archiver/blob/main/CONTRIBUTING.md) dokumentációt a hozzájárulási folyamatról, a kódolási szabványokról és arról, hogyan küldhető be pull request.
+Lásd a [CONTRIBUTING.md](https://github.com/thatgoodpickle/mail-archiver/blob/main/CONTRIBUTING.md) dokumentációt a hozzájárulási folyamatról, a kódolási szabványokról és arról, hogyan küldhető be pull request.
 
 ## 🔗 Kapcsolódó dokumentáció {#related-documentation}
 
