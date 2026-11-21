@@ -115,10 +115,14 @@ Postgres). Behind a flag (`Storage:Mode=Lean`) so upstream merges stay possible.
   the UNCOMPRESSED bytes in the database. It is the only place bodies and attachment bytes
   are stored. Verify recipe for an auditor, no app needed: `gunzip -c <file> | sha256sum`.
   Plain `.eml` export for any message or date range.
-- **Database = index cards only:** message id, folder, dates, addresses, subject, size,
-  file path, hash, a short preview, and per attachment: name, size, hash (no bytes).
-  Search = Postgres full-text word index built from subject, addresses and body text; no
-  stored body text. The index is derived and can be rebuilt from the originals.
+- **Database = index cards plus the plain-text body as search source (decided 2026-11-21):**
+  message id, folder, dates, addresses, subject, size, file path, hash, a short preview, the
+  plain-text `Body` (already capped at 500 KB by upstream; upstream's search index is built
+  from it, so it stays), and per attachment: name, size, hash, MIME part path (no bytes).
+  Dropped in lean mode: `HtmlBody`, `BodyUntruncatedText/Html`, `OriginalBodyText/Html`,
+  attachment bytes (`AttachmentContents`, legacy `Content`). `RawHeaders` stays for now (small,
+  used by date resolution). The `Body` text is derived and rebuildable from the original; the
+  earlier "no stored body text" and "word list only" wording is superseded.
   Search behaviour (corrected 2026-11-21): upstream uses `to_tsvector('simple', ...)` /
   `to_tsquery('simple', ...)` (EmailFilterSql.cs): whole words and prefixes, no stemming, not
   substring matching. The earlier claim that it finds partial words was wrong. The `simple`
