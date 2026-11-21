@@ -699,6 +699,90 @@ namespace MailArchiver.Migrations
                     b.ToTable("MailcowMailboxes", "mail_archiver");
                 });
 
+            modelBuilder.Entity("MailArchiver.Models.IntegrityFinding", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Details")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("EmailId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("RunId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmailId");
+
+                    b.HasIndex("RunId");
+
+                    b.ToTable("IntegrityFindings", "mail_archiver");
+                });
+
+            modelBuilder.Entity("MailArchiver.Models.IntegrityRun", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("Checked")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text");
+
+                    b.Property<int>("Errors")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("FinishedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<int>("Inconsistent")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Invalid")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Missing")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("NotStored")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("StartedBy")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Total")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Valid")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("IntegrityRuns", "mail_archiver");
+                });
+
             modelBuilder.Entity("MailArchiver.Models.RawMessage", b =>
                 {
                     b.Property<int>("ArchivedEmailId")
@@ -984,6 +1068,17 @@ namespace MailArchiver.Migrations
                     b.Navigation("MailAccount");
                 });
 
+            modelBuilder.Entity("MailArchiver.Models.IntegrityFinding", b =>
+                {
+                    b.HasOne("MailArchiver.Models.IntegrityRun", "Run")
+                        .WithMany("Findings")
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Run");
+                });
+
             modelBuilder.Entity("MailArchiver.Models.RawMessage", b =>
                 {
                     b.HasOne("MailArchiver.Models.ArchivedEmail", "ArchivedEmail")
@@ -1042,6 +1137,11 @@ namespace MailArchiver.Migrations
             modelBuilder.Entity("MailArchiver.Models.AttachmentContent", b =>
                 {
                     b.Navigation("Attachments");
+                });
+
+            modelBuilder.Entity("MailArchiver.Models.IntegrityRun", b =>
+                {
+                    b.Navigation("Findings");
                 });
 
             modelBuilder.Entity("MailArchiver.Models.User", b =>

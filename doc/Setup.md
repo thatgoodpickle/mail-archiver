@@ -329,6 +329,9 @@ complete original is stored as well.
 | `RawMessages__FileSystem__BasePath` | `RawMessages` | Directory for the message files. Must point at a mounted volume in Docker. |
 | `RawMessages__FileSystem__ShardDepth` | `2` | Directory levels the email id is spread over. |
 | `RawMessages__FileSystem__HashNamed` | `false` | Fork option: name originals by their SHA-256 instead of the email id (see the original message storage page). |
+| `Integrity__VerifyAllIntervalHours` | `0` | Fork option: run the verify-all integrity pass every this many hours. `0` disables the schedule; a pass can always be started with `POST /api/v1/integrity/runs`. |
+| `Integrity__ScheduleStartupDelayMinutes` | `10` | Delay before the first scheduled pass. |
+| `Storage__Mode` | `Standard` | Fork option: `Lean` archives from the verified original and keeps only index data in the database. Requires `RawMessages__Enabled=true`, `RawMessages__Storage=filesystem`, `RawMessages__FileSystem__HashNamed=true` and `RawMessages__MaxMessageSizeMb=0`; the application refuses to start otherwise. |
 | `RawMessages__FileSystem__VerifyChecksumOnRead` | `true` | Verify the SHA-256 on every download. |
 | `RawMessages__FileSystem__OrphanCleanupEnabled` | `true` | Remove message files that no email refers to. |
 | `RawMessages__FileSystem__OrphanCleanupIntervalHours` | `24` | How often that sweep runs. |

@@ -502,6 +502,9 @@ builder.Services.AddScoped<MailArchiver.Services.Shared.IStrippedContentHydrator
 builder.Services.Configure<MailArchiver.Models.StorageModeOptions>(builder.Configuration.GetSection(MailArchiver.Models.StorageModeOptions.Section));
 builder.Services.AddScoped<MailArchiver.Services.Shared.ILeanIngest, MailArchiver.Services.Shared.LeanIngest>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.IIntegrityService, MailArchiver.Services.Shared.IntegrityService>();
+builder.Services.Configure<MailArchiver.Models.IntegrityOptions>(builder.Configuration.GetSection(MailArchiver.Models.IntegrityOptions.Section));
+builder.Services.AddSingleton<MailArchiver.Services.Shared.IIntegrityRunner, MailArchiver.Services.Shared.IntegrityRunner>();
+builder.Services.AddHostedService<MailArchiver.Services.Shared.IntegrityScheduleService>();
 
 // Fork: Storage:Mode=Lean is only valid with originals stored on the filesystem, hash-named and
 // without a size limit; refuse to start otherwise rather than archive emails without their content.

@@ -17,6 +17,8 @@ namespace MailArchiver.Data
         public DbSet<EmailAttachment> EmailAttachments { get; set; }
         public DbSet<AttachmentContent> AttachmentContents { get; set; }
         public DbSet<RawMessage> RawMessages { get; set; }
+        public DbSet<IntegrityRun> IntegrityRuns { get; set; }
+        public DbSet<IntegrityFinding> IntegrityFindings { get; set; }
         public DbSet<User> Users { get; set; }
         public DbSet<UserMailAccount> UserMailAccounts { get; set; }
         public DbSet<AccessLog> AccessLogs { get; set; }
