@@ -61,17 +61,19 @@ proven at any time. Mbox import is out of scope (its copy is re-serialized, see
    gate or disable deletion for the audit setup (`ENABLE_DELETION`-style switch plus the
    deletion policy), and restore must keep refusing on a hash mismatch.
 
-### Finding while building lean reads (2026-11-21, from a CI test)
+### Finding while building lean reads (2026-11-21, from CI tests)
 
 Attachment bytes are the output of MimeKit's `DecodeToAsync`, the same call upstream's ingest
-uses. For `text/*` parts MimeKit translates line endings (CRLF in the source becomes LF when
-decoded; mail transport requires canonical CRLF for text, so the sender's exact local file
-cannot be recovered more exactly than this), while binary parts (`application/*`, images,
-PDF) decode byte-exact. Lean must therefore hash and serve attachments with the identical
-decode call at ingest and at read time, and the audit claim for an attachment is "the decoded
-content of that MIME part of the stored original", with the part itself always available in
-the original `.eml`. Parts are located by tree path (`MimePartLocator`: `b/c1/m/c0`), not by
-file name, because names can be missing, duplicated or generated at archive time.
+uses. Observed in a CI test: a quoted-printable part whose content contains CRLF decodes with
+LF line endings; base64 parts decode byte-exact. (A first guess that this was a `text/*`
+effect was wrong: it happens for a binary content type too, so it comes from decoding the
+quoted-printable body.) Consequence for the audit claim: an attachment is "the decoded
+content of that MIME part of the stored original" and, for quoted-printable parts with line
+breaks, line endings can differ from the sender's local file; the MIME part itself is always
+available byte-exact in the original `.eml`. Lean must hash and serve attachments with the
+identical decode call at ingest and at read time (pinned by a test). Parts are located by tree
+path (`MimePartLocator`: `b/c1/m/c0`), not by file name, because names can be missing,
+duplicated or generated at archive time.
 
 ## Phase 1: make the original mandatory, prove it
 

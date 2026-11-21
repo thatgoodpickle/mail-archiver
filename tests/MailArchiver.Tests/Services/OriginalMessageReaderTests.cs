@@ -77,8 +77,6 @@ public class OriginalMessageReaderTests
                 ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "report.pdf" },
                 ContentTransferEncoding = ContentEncoding.Base64
             },
-            // application/* (not text/*): MimeKit translates line endings in decoded text parts,
-            // so a binary type is what proves byte-exact decoding of quoted-printable.
             new MimePart("application", "x-data")
             {
                 Content = new MimeContent(new MemoryStream(dupA)),
@@ -137,7 +135,7 @@ public class OriginalMessageReaderTests
     public async Task ReadAttachment_DecodesBase64_AndQuotedPrintable_ToOriginalBytes()
     {
         var pdf = Enumerable.Range(0, 300).Select(i => (byte)i).ToArray();
-        var dupA = Bytes("line one =\r\nline two with = sign and é".Replace("é", "e"));
+        var dupA = Bytes("line one = sign, then more text, and a tab\there");
         var message = Reparse(BuildComplexMessage(pdf, new byte[] { 5 }, dupA, Bytes("b"), new byte[] { 7 }));
 
         var pdfPart = AllParts(message.Body).Single(p => p.FileName == "report.pdf");
@@ -167,6 +165,24 @@ public class OriginalMessageReaderTests
         Assert.Contains("/m/", nestedPath); // inside the attached message
         var read = await OriginalMessageReader.ReadAttachmentAsync(message, nestedPath);
         Assert.Equal(unnamed, read!.Bytes);
+    }
+
+    [Fact]
+    public async Task ReadAttachment_QuotedPrintable_HardLineBreaks_DecodeToLf_PinnedBehaviour()
+    {
+        // Observed in CI (2026-11-21): a quoted-printable part whose content contains CRLF decodes
+        // with LF line endings. Ingest and the lean read use the same DecodeToAsync call, so the
+        // recorded hash and the hash at read time agree; this test pins the behaviour so a
+        // MimeKit change that alters it is noticed.
+        var input = Bytes("line one\r\nline two");
+        var message = Reparse(BuildComplexMessage(Bytes("x"), new byte[] { 1 }, input, Bytes("b"), new byte[] { 2 }));
+        var part = AllParts(message.Body).First(p => p.FileName == "same.txt");
+
+        var first = await OriginalMessageReader.ReadAttachmentAsync(message, MimePartLocator.GetPath(message, part)!);
+        var second = await OriginalMessageReader.ReadAttachmentAsync(message, MimePartLocator.GetPath(message, part)!);
+
+        Assert.Equal(Bytes("line one\nline two"), first!.Bytes);
+        Assert.Equal(first.Sha256, second!.Sha256); // stable across reads
     }
 
     [Theory]
