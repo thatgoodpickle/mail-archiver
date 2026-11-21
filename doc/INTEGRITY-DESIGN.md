@@ -67,8 +67,19 @@ Postgres). Behind a flag (`Storage:Mode=Lean`) so upstream merges stay possible.
   Lists and search never open files.
 - **Integrity consequence:** with no parsed copy left, the parsed-vs-original check (2b)
   only needs to compare the rebuilt index with the originals during verify-all.
-- **De-dup:** message level (Message-ID, per account, as upstream). Attachment de-dup is
-  given up in this stage: the same attachment in N emails is stored N times.
+- **De-dup:** message level only (Message-ID, per account, as upstream; never across
+  accounts). The stored original is never edited: a duplicate arrival is simply not stored.
+  Rule: keep the first original and write every skipped duplicate to a log (Message-ID,
+  SHA-256 of the skipped copy, time seen), because two copies with one Message-ID can differ
+  in headers. Option to keep both copies if a stricter reading is wanted.
+  There is no attachment table in lean mode, so no attachment de-dup; de-duplicating inside
+  stored originals would alter the evidence and is out unless the skeleton layer is chosen.
+- **Read-only access:** the app only reads originals (no edit/rename/replace action, files
+  written once; optional `chattr +i`). Attachment view/download streams the bytes cut from
+  the original, unmodified, after comparing the attachment hash with the recorded one.
+  In-app viewer shows only safe types (PDF, images, plain text) sandboxed; everything else
+  is download-only. Reuses upstream AttachmentPreview/File() code with a new byte source.
+  To check at build time: the interface has no email edit/delete actions beyond this rule.
 - **Attachment text / OCR (later, optional):** a separate asynchronous job extracts text
   (PDF/Word first, OCR after) and adds it to the search index keyed by attachment hash.
   Never blocks archiving; the text is derived and rebuildable. Intended OCR engine: a GPU
