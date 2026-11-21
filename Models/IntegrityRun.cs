@@ -70,6 +70,19 @@ namespace MailArchiver.Models
         /// On by default; a failed append is logged at error level but never blocks the action.
         /// </summary>
         public bool AuditChainEnabled { get; set; } = true;
+
+        /// <summary>Directory the signed manifests and the signing key are written to. Relative paths resolve against the content root.</summary>
+        public string ManifestPath { get; set; } = "Manifests";
+
+        /// <summary>Write a signed manifest every this many hours; 0 (default) disables the schedule (the API still works).</summary>
+        public int ManifestIntervalHours { get; set; } = 0;
+
+        /// <summary>
+        /// The signing key (PEM, ECDSA P-256). Empty = <c>signing-key.pem</c> inside <see cref="ManifestPath"/>,
+        /// created on first use. A key on the same disk as the archive only protects against mistakes and
+        /// non-root changes; keep the public key and the chain head somewhere root on this machine cannot reach.
+        /// </summary>
+        public string ManifestKeyPath { get; set; } = string.Empty;
     }
 
     /// <summary>

@@ -207,15 +207,45 @@ namespace MailArchiver.Services.Shared
         private readonly IIntegrityRunner _runner;
         private readonly IntegrityOptions _options;
         private readonly ILogger<IntegrityScheduleService> _logger;
+        private readonly IServiceScopeFactory? _scopes;
 
-        public IntegrityScheduleService(IIntegrityRunner runner, IOptions<IntegrityOptions> options, ILogger<IntegrityScheduleService> logger)
+        public IntegrityScheduleService(IIntegrityRunner runner, IOptions<IntegrityOptions> options, ILogger<IntegrityScheduleService> logger,
+            IServiceScopeFactory? scopes = null)
         {
+            _scopes = scopes;
             _runner = runner;
             _options = options.Value;
             _logger = logger;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            // Both schedules run in this one service; each is off at 0.
+            var manifests = _options.ManifestIntervalHours > 0 && _scopes != null ? RunManifestScheduleAsync(stoppingToken) : Task.CompletedTask;
+            await Task.WhenAll(RunVerifyScheduleAsync(stoppingToken), manifests);
+        }
+
+        private async Task RunManifestScheduleAsync(CancellationToken stoppingToken)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(Math.Max(0, _options.ScheduleStartupDelayMinutes)), stoppingToken);
+                while (!stoppingToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        using var scope = _scopes!.CreateScope();
+                        await scope.ServiceProvider.GetRequiredService<IManifestService>().CreateAsync("schedule", stoppingToken);
+                    }
+                    catch (Exception ex) { _logger.LogError(ex, "Could not write the scheduled manifest"); }
+
+                    await Task.Delay(TimeSpan.FromHours(_options.ManifestIntervalHours), stoppingToken);
+                }
+            }
+            catch (OperationCanceledException) { /* shutting down */ }
+        }
+
+        private async Task RunVerifyScheduleAsync(CancellationToken stoppingToken)
         {
             if (_options.VerifyAllIntervalHours <= 0) return;
 

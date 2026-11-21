@@ -507,6 +507,7 @@ builder.Services.Configure<MailArchiver.Models.IntegrityOptions>(builder.Configu
 builder.Services.AddSingleton<MailArchiver.Services.Shared.IAuditChain, MailArchiver.Services.Shared.AuditChain>();
 builder.Services.AddSingleton<MailArchiver.Services.Shared.AuditChainInterceptor>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.IAuditChainVerifier, MailArchiver.Services.Shared.AuditChainVerifier>();
+builder.Services.AddScoped<MailArchiver.Services.Shared.IManifestService, MailArchiver.Services.Shared.ManifestService>();
 builder.Services.AddSingleton<MailArchiver.Services.Shared.IIntegrityRunner, MailArchiver.Services.Shared.IntegrityRunner>();
 builder.Services.AddHostedService<MailArchiver.Services.Shared.IntegrityScheduleService>();
 

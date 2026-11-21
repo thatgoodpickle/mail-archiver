@@ -21,10 +21,12 @@ public class IntegrityApiController : ApiControllerBase
     private readonly IAuthenticationService _authService;
 
     private readonly IAuditChainVerifier? _chain;
+    private readonly IManifestService? _manifests;
 
     public IntegrityApiController(MailArchiverDbContext context, IIntegrityRunner runner, IAuthenticationService authService,
-        IAuditChainVerifier? chain = null)
+        IAuditChainVerifier? chain = null, IManifestService? manifests = null)
     {
+        _manifests = manifests;
         _chain = chain;
         _context = context;
         _runner = runner;
@@ -83,6 +85,31 @@ public class IntegrityApiController : ApiControllerBase
             warnings = r.Warnings,
             emailsWithoutArchiveEntry = r.EmailsWithoutArchiveEntry
         });
+    }
+
+    /// <summary>Writes and signs a manifest of every stored original plus the chain head.</summary>
+    [HttpPost("manifests")]
+    public async Task<IActionResult> CreateManifest()
+    {
+        if (_manifests == null) return Problem(statusCode: 501, title: "Manifests are not available.");
+        var m = await _manifests.CreateAsync(_authService.GetCurrentUserDisplayName(HttpContext));
+        return Ok(m);
+    }
+
+    [HttpGet("manifests")]
+    public async Task<IActionResult> ListManifests([FromQuery] int limit = 50)
+    {
+        if (_manifests == null) return Problem(statusCode: 501, title: "Manifests are not available.");
+        return Ok(await _manifests.ListAsync(Math.Clamp(limit, 1, 500)));
+    }
+
+    /// <summary>Checks a manifest: signature, entries file, chain head, and emails changed since.</summary>
+    [HttpGet("manifests/{name}/verify")]
+    public async Task<IActionResult> VerifyManifest(string name)
+    {
+        if (_manifests == null) return Problem(statusCode: 501, title: "Manifests are not available.");
+        var check = await _manifests.VerifyAsync(name);
+        return check == null ? NotFound() : Ok(check);
     }
 
     /// <summary>One run with its findings (the first 1000, oldest first).</summary>
