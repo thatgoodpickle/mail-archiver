@@ -75,24 +75,29 @@ identical decode call at ingest and at read time (pinned by a test). Parts are l
 path (`MimePartLocator`: `b/c1/m/c0`), not by file name, because names can be missing,
 duplicated or generated at archive time.
 
-### Finding: upstream writes the original AFTER the parsed rows (2026-11-21, EmailCoreService ~2045)
+### Lean ingest builds the record from the original (decided 2026-11-21, user's suggestion)
 
-`ArchiveEmailAsync` saves the email row with its bodies and attachments first, then writes the
-original (the file needs the email id) and saves the `RawMessage` row in a second save. So
-"strip only after the original is confirmed" is the natural shape for lean mode, not an extra
-guard: lean = a **strip step that runs after the original is written and verified**, and the
-same step converts existing rows. Per email it: (1) reads the original back through the store
-(hash checked), (2) parses it, (3) matches every `EmailAttachment` to a distinct MIME part of
-the original whose decoded SHA-256 equals the attachment's stored hash (no match, including
-the synthesized .ics attachment => the email is left whole and logged), (4) records
-`PartPath` and `Sha256` on each attachment, (5) in one transaction clears `HtmlBody`,
-`BodyUntruncated*`, `OriginalBody*` and the attachment bytes (the dedup content rows become
-orphans for the existing garbage collection) and sets `ArchivedEmail.ContentStripped = true`.
-Plain-text `Body`, `RawHeaders` and all list fields stay. Readers check `ContentStripped` and
-read from the original; a stripped email whose original is missing is an error, never an empty
-page. Locked rows are fine: the trigger watches `Subject/Body/From/To/ContentHash`, none of
-which the strip touches. Needs a migration (`EmailAttachments.PartPath`, `.Sha256`;
-`ArchivedEmails.ContentStripped`).
+Upstream (`EmailCoreService.ArchiveEmailAsync` ~2045) saves the full parsed row first and writes
+the original afterwards (the file is named by the email id). Because no mail is synced before
+lean mode exists, there are no existing rows to convert, so lean mode does NOT use a separate
+strip step. For each new email, inside one database transaction:
+1. Parse the downloaded bytes once; build a LEAN row: addresses, subject, dates, plain-text
+   `Body`, `RawHeaders`, and per attachment name/size/content type/content id, decoded
+   SHA-256 and MIME part path. No `HtmlBody`, no `BodyUntruncated*`/`OriginalBody*`, no
+   attachment bytes; `ContentStripped = true`.
+2. Insert the row (the id now exists), write the original, read it back (hash checked).
+3. Re-parse the file just written and confirm every attachment resolves by part path to
+   content with the recorded SHA-256.
+4. Any failure (write, hash, a part that does not resolve, the synthesized .ics attachment, an
+   original over the size limit): fill the FULL data (we still hold it in memory) into the same
+   row, `ContentStripped = false`, log it, commit. Nothing is lost and bulky data is only
+   persisted when needed.
+Needs a migration (`EmailAttachments.PartPath`, `.Sha256`; `ArchivedEmails.ContentStripped`).
+Readers check `ContentStripped` and read from the original; a stripped email whose original is
+missing is an error, never an empty page. Locked rows are unaffected (the trigger watches
+`Subject/Body/From/To/ContentHash`). A conversion tool for already-archived rows is only built
+if the sync-order decision is ever reversed. Startup checks in Lean: `RawMessages:Enabled`,
+filesystem storage and `MaxMessageSizeMb = 0` are required, otherwise the app refuses to start.
 
 ## Phase 1: make the original mandatory, prove it
 
