@@ -408,6 +408,11 @@ namespace MailArchiver.Data
                 .Property(e => e.IsLocked)
                 .HasDefaultValue(false);
 
+            // Lean storage flag: existing and new emails are stored whole unless lean mode strips them
+            modelBuilder.Entity<ArchivedEmail>()
+                .Property(e => e.ContentStripped)
+                .HasDefaultValue(false);
+
             // Original body content with null bytes preserved (stored as byte array)
             modelBuilder.Entity<ArchivedEmail>()
                 .Property(e => e.OriginalBodyText)

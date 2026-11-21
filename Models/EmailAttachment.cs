@@ -25,6 +25,16 @@ namespace MailArchiver.Models
         // these bytes into AttachmentContents and sets this column to NULL.
         public byte[]? LegacyContent { get; set; }
 
+        // ============================================================
+        // Lean storage (see doc/INTEGRITY-DESIGN.md)
+        // ============================================================
+        // For an email with ContentStripped = true the attachment bytes are not stored here;
+        // they are cut out of the stored original on demand. PartPath locates the MIME part
+        // (MimePartLocator grammar, e.g. "b/c1/m/c0"); Sha256 is the lowercase hex SHA-256 of
+        // the decoded bytes, recorded at archive time and checked when the part is read.
+        public string? PartPath { get; set; }
+        public string? Sha256 { get; set; }
+
         // Holds the bytes of a freshly created attachment until the
         // AttachmentDeduplicationInterceptor turns them into a deduplicated
         // AttachmentContent reference on SaveChanges. Not mapped to the database.

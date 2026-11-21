@@ -286,6 +286,11 @@ namespace MailArchiver.Migrations
                     b.Property<string>("ContentHash")
                         .HasColumnType("varchar(64)");
 
+                    b.Property<bool>("ContentStripped")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("FolderName")
                         .IsRequired()
                         .HasColumnType("text");
@@ -601,6 +606,12 @@ namespace MailArchiver.Migrations
                     b.Property<byte[]>("LegacyContent")
                         .HasColumnType("bytea")
                         .HasColumnName("Content");
+
+                    b.Property<string>("PartPath")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Sha256")
+                        .HasColumnType("text");
 
                     b.Property<long>("Size")
                         .HasColumnType("bigint");

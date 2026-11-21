@@ -43,6 +43,11 @@ namespace MailArchiver.Models
         public DateTime? HashCreatedAt { get; set; }
         public bool IsLocked { get; set; } = false;
 
+        // Lean storage: true when the HTML body, the untruncated body variants and the attachment
+        // bytes are NOT kept in the database and are read from the stored original instead.
+        // Plain-text Body, headers and list fields always stay. See doc/INTEGRITY-DESIGN.md.
+        public bool ContentStripped { get; set; } = false;
+
         public virtual MailAccount MailAccount { get; set; }
         public virtual ICollection<EmailAttachment> Attachments { get; set; } = new List<EmailAttachment>();
 
