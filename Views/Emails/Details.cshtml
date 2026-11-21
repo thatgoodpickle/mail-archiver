@@ -100,6 +100,18 @@
                 </div>
             }
 
+            <!-- Integrity panel: proves the email against its stored original on demand -->
+            <div class="alert alert-light border d-flex flex-wrap align-items-center gap-2 mb-3" id="integrityPanel" role="status">
+                <i class="bi bi-shield-check fs-5"></i>
+                <strong>Integrity</strong>
+                <span id="integrityStatus" class="badge bg-secondary">Not checked</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="integrityCheckButton"
+                    data-url="@Url.Action("Integrity", new { id = Model.Email.Id })">
+                    Verify now
+                </button>
+                <div id="integrityDetail" class="w-100 small text-muted" hidden></div>
+            </div>
+
             <!-- Email Meta Information in Mobile-friendly format -->
             <div class="row g-2 mb-2">
                 <div class="col-12 col-md-2">
@@ -334,6 +346,44 @@
     </div>
 </div>
 
+
+<script>
+    (function () {
+        var btn = document.getElementById('integrityCheckButton');
+        if (!btn) return;
+        var badge = document.getElementById('integrityStatus');
+        var detail = document.getElementById('integrityDetail');
+        var classes = { Valid: 'bg-success', Invalid: 'bg-danger', Missing: 'bg-danger', Inconsistent: 'bg-warning text-dark', NotStored: 'bg-secondary' };
+        function show(text, cls) {
+            badge.className = 'badge ' + cls;
+            badge.textContent = text;
+        }
+        btn.addEventListener('click', function () {
+            btn.disabled = true;
+            show('Checking...', 'bg-secondary');
+            detail.hidden = true;
+            fetch(btn.dataset.url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (d) {
+                    show(d.status, classes[d.status] || 'bg-secondary');
+                    // textContent only: findings come from archived mail.
+                    var lines = [];
+                    if (d.sha256) lines.push('SHA-256 of original: ' + d.sha256);
+                    if (d.source) lines.push('Source: ' + d.source + (d.storage ? ', stored in ' + d.storage : '') + (d.lean ? ', lean copy' : ''));
+                    (d.findings || []).forEach(function (f) { lines.push(String(f)); });
+                    detail.textContent = '';
+                    lines.forEach(function (l) {
+                        var div = document.createElement('div');
+                        div.textContent = l;
+                        detail.appendChild(div);
+                    });
+                    detail.hidden = lines.length === 0;
+                })
+                .catch(function (e) { show('Check failed', 'bg-danger'); detail.textContent = String(e.message || e); detail.hidden = false; })
+                .finally(function () { btn.disabled = false; });
+        });
+    })();
+</script>
 
 <script>
     // Securely pass email reply data to JavaScript as JSON (prevents XSS via data-* attributes)

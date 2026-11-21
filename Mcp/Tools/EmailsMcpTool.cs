@@ -30,6 +30,8 @@ public class EmailsMcpTool : McpToolBase
     private readonly McpOptions _options;
     private readonly IAccessLogService _accessLogService;
     private readonly DateTimeHelper _dateTimeHelper;
+    private readonly IStrippedContentHydrator _contentHydrator;
+    private readonly IIntegrityService _integrityService;
 
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
@@ -40,9 +42,13 @@ public class EmailsMcpTool : McpToolBase
         IAccessLogService accessLogService,
         IHttpContextAccessor httpContextAccessor,
         DateTimeHelper dateTimeHelper,
-        IRawMessageStore rawMessageStore)
+        IRawMessageStore rawMessageStore,
+        IStrippedContentHydrator contentHydrator,
+        IIntegrityService integrityService)
         : base(httpContextAccessor)
     {
+        _contentHydrator = contentHydrator;
+        _integrityService = integrityService;
         _context = context;
         _emailCoreService = emailCoreService;
         _options = options.Value;
@@ -135,6 +141,12 @@ public class EmailsMcpTool : McpToolBase
 
         var hasRawMessage = await _context.RawMessages.AnyAsync(r => r.ArchivedEmailId == email.Id);
 
+        // Lean-stored: restore the bodies from the original (attachment bytes are not needed here).
+        if (email.ContentStripped)
+        {
+            await _contentHydrator.HydrateAsync(email, _ => false);
+        }
+
         return EmailDetailDto.FromEntity(email, hasRawMessage);
     }
 
@@ -158,6 +170,18 @@ public class EmailsMcpTool : McpToolBase
         if (att == null || (allowed != null && !allowed.Contains(att.ArchivedEmail.MailAccountId)))
         {
             throw new KeyNotFoundException($"Attachment {attachmentId} for email {id} was not found or is not accessible.");
+        }
+
+        if (att.Size > _options.MaxAttachmentBytes)
+        {
+            throw new InvalidOperationException(
+                $"Attachment {attachmentId} is {att.Size} bytes which exceeds the configured limit of {_options.MaxAttachmentBytes} bytes.");
+        }
+
+        // Lean-stored: cut the bytes out of the original and check them against the recorded hash.
+        if (att.ArchivedEmail.ContentStripped)
+        {
+            await _contentHydrator.HydrateAttachmentAsync(att);
         }
 
         var bytes = att.Content;
@@ -203,6 +227,11 @@ public class EmailsMcpTool : McpToolBase
         // must not be materialized in memory first. The exact size is checked again below.
         EnsureMessageSizeAllowed(id, AttachmentPayloadSize(email));
 
+        if (email.ContentStripped)
+        {
+            await _contentHydrator.HydrateAsync(email);
+        }
+
         var bytes = RawMessageCodec.Serialize(ArchivedEmailMimeBuilder.Build(email, _dateTimeHelper));
         EnsureMessageSizeAllowed(id, bytes.LongLength);
 
@@ -237,6 +266,35 @@ public class EmailsMcpTool : McpToolBase
         await _accessLogService.LogAccessAsync(CurrentUsername, AccessLogType.Download, emailId: id);
 
         return ToMessageDownload(id, "raw", content.Source, content.Sha256, content.Bytes);
+    }
+
+    [McpServerTool(Name = "get_email_integrity")]
+    [Description("Proves an archived email against its stored original: re-hashes the original and re-derives the database copy (subject, addresses, text body, attachments) from it. status is Valid, Invalid (original changed), Missing (original gone), NotStored (no original kept) or Inconsistent (database copy differs from the original). findings lists the reasons. sha256 is the hash of the original; source and storage say where it came from and where it lives; lean tells whether the database copy is the lean form.")]
+    public async Task<object> GetEmailIntegrityAsync(
+        [Description("The archived email id (from search_emails).")] int id)
+    {
+        var allowed = await GetAllowedAccountIdsAsync();
+        var accountId = await _context.ArchivedEmails
+            .Where(e => e.Id == id)
+            .Select(e => (int?)e.MailAccountId)
+            .FirstOrDefaultAsync();
+
+        if (accountId == null || (allowed != null && !allowed.Contains(accountId.Value)))
+        {
+            throw new KeyNotFoundException($"Email {id} was not found or is not accessible.");
+        }
+
+        var report = await _integrityService.VerifyAsync(id);
+        return new
+        {
+            emailId = report.EmailId,
+            status = report.Status.ToString(),
+            sha256 = report.Sha256,
+            source = report.Source,
+            storage = report.StorageType,
+            lean = report.Lean,
+            findings = report.Findings
+        };
     }
 
     private void EnsureMessageDownloadsAllowed()

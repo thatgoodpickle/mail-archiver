@@ -42,6 +42,7 @@ namespace MailArchiver.Controllers
         private readonly RawMessageOptions _rawMessageOptions;
         private readonly IRawMessageStore? _rawMessageStore;
         private readonly IStrippedContentHydrator? _contentHydrator;
+        private readonly IIntegrityService? _integrityService;
 
         public EmailsController(
             MailArchiverDbContext context,
@@ -64,10 +65,12 @@ namespace MailArchiver.Controllers
             IEmailDeletionService? emailDeletionService = null,
             IOptions<RawMessageOptions>? rawMessageOptions = null,
             IRawMessageStore? rawMessageStore = null,
-            IStrippedContentHydrator? contentHydrator = null)
+            IStrippedContentHydrator? contentHydrator = null,
+            IIntegrityService? integrityService = null)
 
         {
             _contentHydrator = contentHydrator;
+            _integrityService = integrityService;
             _context = context;
             _emailCoreService = emailCoreService;
             _providerFactory = providerFactory;
@@ -397,6 +400,32 @@ namespace MailArchiver.Controllers
             if (_contentHydrator == null)
                 throw new InvalidOperationException("Lean-stored email but no content hydrator is registered.");
             await _contentHydrator.HydrateAttachmentAsync(attachment);
+        }
+
+        // GET: Emails/Integrity/5 (JSON for the integrity panel on the detail page)
+        // Runs the same check as GET api/v1/emails/{id}/integrity.
+        [HttpGet]
+        [EmailAccessRequired]
+        public async Task<IActionResult> Integrity(int id)
+        {
+            if (_integrityService == null)
+                return StatusCode(501, new { error = "Integrity verification is not available." });
+
+            var exists = await _context.ArchivedEmails.AnyAsync(e => e.Id == id);
+            if (!exists)
+                return NotFound();
+
+            var report = await _integrityService.VerifyAsync(id);
+            return Json(new
+            {
+                emailId = report.EmailId,
+                status = report.Status.ToString(),
+                sha256 = report.Sha256,
+                source = report.Source,
+                storage = report.StorageType,
+                lean = report.Lean,
+                findings = report.Findings
+            });
         }
 
         // GET: Emails/Details/5
