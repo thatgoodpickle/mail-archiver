@@ -14,8 +14,19 @@ proven at any time. Mbox import is out of scope (its copy is re-serialized, see
 - Checksum is verified on read for the filesystem backend (`VerifyChecksumOnRead`), on
   storage migration, and before export/restore (refused on mismatch).
 - Restore already appends the stored original through the provider client.
-- `ArchivedEmail.ContentHash`, `HashCreatedAt`, `IsLocked` are mapped in the model and
-  DbContext but never populated or read (dead "compliance fields").
+- `ArchivedEmail.ContentHash` and `HashCreatedAt` are mapped in the model and DbContext
+  but never populated or read.
+- `ArchivedEmail.IsLocked` is NOT dead (corrected 2026-11-21): the DB trigger
+  `mail_archiver.prevent_locked_email_changes` (migration 20251105131500) rejects any
+  change to a locked row except `IsLocked` and `FolderName`, and `DeletionPolicyApplicationService`
+  sets `IsLocked` on every row at startup from the deletion policy (`DeletionAllowed`;
+  default column value set in Program.cs). Consequences: (a) it is a built-in write
+  protection we can reuse for audit; (b) any job that rewrites or clears the parsed copy of
+  an email (the lean-mode conversion) is blocked by the trigger on locked rows, so the
+  conversion must be designed around it (unlock, change, relock inside one transaction, or
+  a dedicated, logged conversion path), and must never leave rows unlocked afterwards;
+  (c) the locked state and the unlock path in MailAccountsController must be reviewed
+  before any lean-mode code is written.
 - `AccessLog` + `AccessLogService`; read-only REST API and MCP server.
 
 ## Phase 1: make the original mandatory, prove it
@@ -111,7 +122,11 @@ Postgres). Behind a flag (`Storage:Mode=Lean`) so upstream merges stay possible.
 2. Signed manifest: stored on the same drive as the archive. Known limit: no off-VM trust
    boundary (mitigations: PBS snapshots keep older manifests; copy the chain-head hash
    elsewhere now and then). Signing key location still open.
-3. `ContentHash`/`HashCreatedAt`/`IsLocked`: left alone.
+3. `ContentHash`/`HashCreatedAt`: left alone. `IsLocked` is in use upstream (trigger plus
+   deletion policy), see "What already exists upstream"; do not touch it without the review in (c).
+5. Sync order: user decided 2026-11-21 NOT to start syncs on the existing app first; lean mode
+   is built before any Gmail sync. Originals cannot be back-filled, so no mail is synced until
+   then.
 4. Source of mail: Hestia deleted received mail after forwarding, so Gmail All Mail over
    IMAP is the only source. The audit claim must therefore read "byte-exact as held by
    Gmail at capture time", not "as originally delivered" (it includes the forwarding
