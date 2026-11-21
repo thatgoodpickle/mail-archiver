@@ -1,5 +1,7 @@
 # 🔒 Security Policy
 
+> **This is a fork** of [s1t5/mail-archiver](https://github.com/s1t5/mail-archiver). To report a vulnerability in this fork, use a private security advisory: [https://github.com/thatgoodpickle/mail-archiver/security/advisories/new](https://github.com/thatgoodpickle/mail-archiver/security/advisories/new) (do not open a public issue). The email address below is the original upstream maintainer's contact, for problems in the unmodified upstream code.
+
 The Mail-Archiver project takes security seriously. This document describes how to report
 security vulnerabilities and how they are handled.
 
@@ -8,7 +10,7 @@ security vulnerabilities and how they are handled.
 If you believe you have found a security vulnerability in Mail-Archiver, **please do not open
 a public GitHub issue**. Instead, report it responsibly to:
 
-📧 **Email:** mail@s1t5.dev
+📧 **Email (original upstream maintainer):** mail@s1t5.dev
 
 ### Information to include
 
@@ -23,7 +25,7 @@ possible:
 
 ### PGP-encrypted reports (optional)
 
-You may encrypt your report using the maintainer's OpenPGP public key, available on
+You may encrypt your report using the original upstream maintainer's OpenPGP public key, available on
 [keys.openpgp.org](https://keys.openpgp.org/search?q=mail@s1t5.dev):
 
 ### Response and disclosure

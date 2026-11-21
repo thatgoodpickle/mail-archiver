@@ -2,7 +2,8 @@ namespace MailArchiver.Models
 {
     /// <summary>
     /// Configuration options for the release notes / version update splash screen.
-    /// The GitHub repository (s1t5/mail-archiver) is hardcoded in VersionUpdateService.
+    /// Release notes and the update hint are read from the GitHub repository named by
+    /// <see cref="Owner"/>/<see cref="Repository"/> (default: this fork).
     /// </summary>
     public class ReleaseNotesOptions
     {
@@ -13,6 +14,12 @@ namespace MailArchiver.Models
         /// Default: true
         /// </summary>
         public bool Enabled { get; set; } = true;
+
+        /// <summary>GitHub owner whose releases are used. Default: thatgoodpickle (this fork).</summary>
+        public string Owner { get; set; } = "thatgoodpickle";
+
+        /// <summary>GitHub repository whose releases are used. Default: mail-archiver.</summary>
+        public string Repository { get; set; } = "mail-archiver";
 
         /// <summary>
         /// HTTP request timeout in seconds for GitHub API calls.

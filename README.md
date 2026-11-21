@@ -1,5 +1,7 @@
 # 📧 Mail-Archiver - Email Archiving System
 
+> **Fork notice.** This repository is a fork of [s1t5/mail-archiver](https://github.com/s1t5/mail-archiver) maintained at [thatgoodpickle/mail-archiver](https://github.com/thatgoodpickle/mail-archiver). It adds audit-grade integrity features on the `integrity` branch (see [doc/INTEGRITY-DESIGN.md](doc/INTEGRITY-DESIGN.md)); `main` mirrors upstream. All credit for Mail-Archiver goes to its original author; the sponsor links below are the original author's. Licensed under GPL-3.0.
+
 **A comprehensive solution for archiving, searching, and exporting emails**
 
 🌐 **Website:** [mail-archiver.org](https://mail-archiver.org)
@@ -170,7 +172,7 @@ For all configuration options, see the [Setup Guide](https://s1t5.github.io/mail
 
 We welcome contributions from the community! Please read our [Contributing Guide](CONTRIBUTING.md) for detailed information about how to contribute to Mail Archiver.
 
-For code changes by third parties, please coordinate with us via email at mail@s1t5.dev before making any changes.
+For code changes by third parties, please open an issue on [this fork](https://github.com/thatgoodpickle/mail-archiver/issues) first. (The original upstream project asks contributors to coordinate by email at mail@s1t5.dev.)
 
 You can also:
 - Open an Issue for bug reports or feature requests

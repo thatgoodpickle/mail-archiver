@@ -1,5 +1,7 @@
 # 🤝 Contributing to Mail Archiver
 
+> **This is a fork** of [s1t5/mail-archiver](https://github.com/s1t5/mail-archiver), maintained at [thatgoodpickle/mail-archiver](https://github.com/thatgoodpickle/mail-archiver). Open issues and pull requests for the changes made here on this fork. The email address below belongs to the original upstream project and applies to code contributions to *that* project.
+
 Thank you for your interest in contributing to Mail Archiver! This document provides guidelines for contributing to the project.
 
 ## 📬 How to Contribute
@@ -9,7 +11,7 @@ Thank you for your interest in contributing to Mail Archiver! This document prov
 Code changes by third parties are welcome and can be made on a small scale after **prior coordination via email**. 
 
 **Please contact us before making any code changes:**
-📧 **Email:** mail@s1t5.dev
+📧 **Email (original upstream project):** mail@s1t5.dev
 
 This coordination helps ensure that:
 - Your proposed changes align with the project's goals
@@ -113,6 +115,6 @@ By contributing to Mail Archiver, you agree that your contributions will be lice
 ## 📞 Contact
 
 For questions about contributing or to coordinate code changes:
-📧 **Email:** mail@s1t5.dev
+📧 **Email (original upstream project):** mail@s1t5.dev
 
 Thank you for helping make Mail Archiver better!

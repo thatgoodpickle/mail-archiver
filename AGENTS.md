@@ -49,7 +49,7 @@ dotnet run -- --import-eml --file /path/to/archive.zip --account-id 1
 
 ## Contributing
 
-- Third-party code changes **require prior coordination via email** (`mail@s1t5.dev`) before opening PRs. See `CONTRIBUTING.md`.
+- This is a fork (https://github.com/thatgoodpickle/mail-archiver); upstream is https://github.com/s1t5/mail-archiver. `main` mirrors upstream, work goes on the `integrity` branch. Upstream requires prior coordination via email (`mail@s1t5.dev`) before PRs to the original project; see `CONTRIBUTING.md`.
 - Documentation lives in `doc/`.
 
 ## Release Notes (nextrelease.md)

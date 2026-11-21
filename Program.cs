@@ -83,7 +83,7 @@ if (authEnabled != null && authEnabled.Equals("false", StringComparison.OrdinalI
     // Create a logger to log the error message
     var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
     logger.LogError("Authentication is now mandatory and must be enabled. Please remove the 'Enabled' property from the 'Authentication' section in appsettings.json or set it to 'true' and define admin credentials to access the application.");
-    logger.LogError("For more information, please refer to the documentation ( https://github.com/s1t5/mail-archiver/blob/main/doc/Setup.md ) on how to set up username and password using environment variables.");
+    logger.LogError("For more information, please refer to the documentation ( https://github.com/thatgoodpickle/mail-archiver/blob/main/doc/Setup.md ) on how to set up username and password using environment variables.");
     Environment.Exit(1);
 }
 
@@ -94,7 +94,7 @@ if (string.IsNullOrWhiteSpace(authPassword))
     // Create a logger to log the error message
     var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
     logger.LogError("Authentication password must be set and cannot be empty. Please define a valid password in the 'Authentication' section in appsettings.json or using environment variables.");
-    logger.LogError("For more information, please refer to the documentation ( https://github.com/s1t5/mail-archiver/blob/main/doc/Setup.md ) on how to set up username and password using environment variables.");
+    logger.LogError("For more information, please refer to the documentation ( https://github.com/thatgoodpickle/mail-archiver/blob/main/doc/Setup.md ) on how to set up username and password using environment variables.");
     Environment.Exit(1);
 }
 

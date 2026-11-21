@@ -186,9 +186,9 @@ namespace MailArchiver.Services
 
         private async Task<IReadOnlyList<GitHubRelease>> FetchReleasesFromGitHubAsync()
         {
-            // Hardcoded — release notes are always fetched from the public repository
-            const string owner = "s1t5";
-            const string repo = "mail-archiver";
+            // Release notes are fetched from the repository named in ReleaseNotes:Owner/Repository
+            var owner = _options.Owner;
+            var repo = _options.Repository;
             var url = $"https://api.github.com/repos/{owner}/{repo}/releases";
 
             var client = _httpClientFactory.CreateClient("GitHubReleases");
