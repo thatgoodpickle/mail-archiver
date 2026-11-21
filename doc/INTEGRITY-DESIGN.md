@@ -49,15 +49,40 @@ proven at any time. Mbox import is out of scope (its copy is re-serialized, see
 - Export a signed manifest (hash of every original + chain head) to a path outside the
   database disk (NAS), so a database edit cannot also rewrite the manifest.
 
-## Phase 3: lean storage (DROPPED for now, decision 2026-11-21)
+## Phase 3: single-copy ("lean") storage (DECIDED 2026-11-21, reverses the earlier drop)
 
-- Decision: keep upstream's layout (original stored whole + parsed copy, about 2x) and
-  grow the disk; revisit only if measured disk use says otherwise (second opinion and
-  advisor both favour this; check 2b above keeps the parsed copy honest). Original idea:
-- A setting that stops storing a second copy of bodies/attachments: the database keeps
-  metadata, search text and attachment names/sizes/hashes; attachment downloads are cut
-  from the original on demand. Costs attachment de-duplication; brings storage to ~1x.
-  Needs a backfill for older rows. Behind a flag so upstream merges stay possible.
+Reason: the user does not want to store the email twice (original plus parsed copy in
+Postgres). Behind a flag (`Storage:Mode=Lean`) so upstream merges stay possible.
+
+- **Original:** one gzipped file per email on the filesystem (ext4, bind mount), SHA-256 of
+  the UNCOMPRESSED bytes in the database. It is the only place bodies and attachment bytes
+  are stored. Verify recipe for an auditor, no app needed: `gunzip -c <file> | sha256sum`.
+  Plain `.eml` export for any message or date range.
+- **Database = index cards only:** message id, folder, dates, addresses, subject, size,
+  file path, hash, a short preview, and per attachment: name, size, hash (no bytes).
+  Search = Postgres full-text word index built from subject, addresses and body text; no
+  stored body text. The index is derived and can be rebuilt from the originals.
+- **Showing an email / downloading an attachment:** decompress the one original in memory
+  and cut the part out; small cache of recently opened items, no permanent second copy.
+  Lists and search never open files.
+- **Integrity consequence:** with no parsed copy left, the parsed-vs-original check (2b)
+  only needs to compare the rebuilt index with the originals during verify-all.
+- **De-dup:** message level (Message-ID, per account, as upstream). Attachment de-dup is
+  given up in this stage: the same attachment in N emails is stored N times.
+- **Attachment text / OCR (later, optional):** a separate asynchronous job extracts text
+  (PDF/Word first, OCR after) and adds it to the search index keyed by attachment hash.
+  Never blocks archiving; the text is derived and rebuildable. Intended OCR engine: a GPU
+  service (PaddleOCR/docTR) using the T1000 8 GB passed through to the clio VM; Tesseract
+  (Tika) has no GPU mode. Needs IOMMU/VFIO on Hades, driver + container toolkit in the VM,
+  a backup/restore test of the VM with passthrough.
+- **Later option: skeleton layer** to regain attachment de-dup: store the original with
+  attachment bodies replaced by hash references into a content-addressed store; reassemble
+  byte-exact; verify the reassembled SHA-256 at save time and fall back to whole storage on
+  mismatch. Risks: imperfect reassembly of odd MIME, shared file damage hits many emails,
+  deletion bugs, backup coupling (skeletons and attachment store together), harder audit
+  story. Only worth it if measured attachment duplication is large.
+- **Measure before deciding more:** after the first sync compare `du` of the originals with
+  the Postgres size (index cost); thao import in Open Archiver is a comparable data point.
 
 ## Conventions
 
@@ -71,7 +96,7 @@ proven at any time. Mbox import is out of scope (its copy is re-serialized, see
 
 ## Decisions (2026-11-21)
 
-1. Lean/de-dup storage: not now (see Phase 3).
+1. Single-copy lean storage: YES (see Phase 3); attachment de-dup deferred (skeleton layer is a later option); OCR later on GPU.
 2. Signed manifest: stored on the same drive as the archive. Known limit: no off-VM trust
    boundary (mitigations: PBS snapshots keep older manifests; copy the chain-head hash
    elsewhere now and then). Signing key location still open.
