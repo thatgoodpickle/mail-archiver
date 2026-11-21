@@ -1,0 +1,75 @@
+name: CI (integrity branch)
+
+# Fork-only workflow: build, run the unit tests, and publish a test image to GHCR
+# (ghcr.io/<owner>/mailarchiver:integrity and :sha-<short>) on every push to `integrity`.
+# Nothing here uses Docker Hub or any secret other than the built-in GITHUB_TOKEN.
+
+on:
+  push:
+    branches: [integrity]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build MailArchiver.sln -c Release
+
+      - name: Test
+        run: dotnet test tests/MailArchiver.Tests/MailArchiver.Tests.csproj -c Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: "**/test-results.trx"
+          if-no-files-found: ignore
+
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/mailarchiver
+          tags: |
+            type=raw,value=integrity
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
