@@ -99,6 +99,27 @@ missing is an error, never an empty page. Locked rows are unaffected (the trigge
 if the sync-order decision is ever reversed. Startup checks in Lean: `RawMessages:Enabled`,
 filesystem storage and `MaxMessageSizeMb = 0` are required, otherwise the app refuses to start.
 
+### Hash as identifier, audit reference in three places, threat model (decided 2026-11-21)
+
+- **Content-addressed originals:** each original is stored under a path derived from its
+  SHA-256 (e.g. `ab/cd/<sha256>.eml.gz`). The hash is the stable external identifier of an
+  email (file store, database, audit log, what an auditor is shown). The database id stays as
+  the row key, because two emails can share a Message-ID with different bytes (different
+  hashes; both recorded in the duplicate log). Hash-named files can be written and verified
+  BEFORE the row exists, which removes the id-first ordering problem of upstream's id-named
+  files and simplifies lean ingest (write file, verify, insert row). Deletion rule: byte-
+  identical originals (e.g. in two accounts) share one file; a file is removed only when no
+  row refers to it (the orphan collector already works this way). This replaces
+  `RawMessagePathResolver` naming for lean mode; upstream-named rows stay readable.
+- **Audit reference kept in three independent places:** (1) the database row; (2) the
+  hash-chained audit log and the signed manifest next to the files; (3) a copy outside the
+  archive machine (cheap options: a daily chain-head hash appended to a private repo, or sent
+  to a mailbox the user controls; exact target not decided).
+- **Threat model, stated plainly:** the design protects against mistakes, software bugs, a
+  changed file, a changed database row and non-root tampering. Anyone with root on the archive
+  machine can change files, database, log and manifest together; against that, only the copy
+  held somewhere root cannot reach (3) helps. The audit claim must not say more than that.
+
 ## Phase 1: make the original mandatory, prove it
 
 1. `RawMessages:Required` (default false, so upstream behaviour is unchanged): when true,
