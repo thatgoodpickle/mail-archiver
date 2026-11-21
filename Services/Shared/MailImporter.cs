@@ -240,6 +240,14 @@ namespace MailArchiver.Services.Shared
                     archivedEmail.HasAttachments = true;
                 }
 
+                // RawMessages:Required: an import without a keepable original is refused.
+                var refusal = RawMessageRequirement.RefusalReason(_rawMessageOptions, rawMessage);
+                if (refusal != null)
+                {
+                    RawMessageRequirement.LogRefused(_logger, message.Subject, refusal, null);
+                    return ImportResult.CreateFailed($"RawMessages:Required is set and no original could be kept ({refusal}).");
+                }
+
                 // The row goes in first: the filesystem backend keys its file by the email id,
                 // which the database assigns. A Postgres-backed row carries its bytes along.
                 context.ArchivedEmails.Add(archivedEmail);

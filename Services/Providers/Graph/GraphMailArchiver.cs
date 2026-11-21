@@ -78,6 +78,14 @@ namespace MailArchiver.Services.Providers.Graph
 
                 var (archivedEmail, rawCapture) = await BuildArchivedEmailAsync(graphClient, account, message, messageId, isOutgoing, folderName);
 
+                // RawMessages:Required: refuse before anything is saved.
+                var refusal = RawMessageRequirement.RefusalReason(_rawMessageOptions, rawCapture);
+                if (refusal != null)
+                {
+                    RawMessageRequirement.LogRefused(_logger, archivedEmail.Subject, refusal, _metricsRecorder);
+                    return false;
+                }
+
                 _context.ArchivedEmails.Add(archivedEmail);
                 await _context.SaveChangesAsync();
 

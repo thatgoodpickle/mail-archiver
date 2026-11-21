@@ -513,7 +513,8 @@ builder.Services.AddHostedService<MailArchiver.Services.Shared.IntegritySchedule
         .Get<MailArchiver.Models.StorageModeOptions>() ?? new MailArchiver.Models.StorageModeOptions();
     var rawForCheck = builder.Configuration.GetSection(MailArchiver.Models.RawMessageOptions.RawMessages)
         .Get<MailArchiver.Models.RawMessageOptions>() ?? new MailArchiver.Models.RawMessageOptions();
-    var leanProblems = storageMode.Validate(rawForCheck);
+    var leanProblems = storageMode.Validate(rawForCheck)
+        .Concat(MailArchiver.Services.Shared.RawMessageRequirement.Validate(rawForCheck)).ToList();
     if (leanProblems.Count > 0)
     {
         throw new InvalidOperationException("Invalid lean storage configuration: " + string.Join(" ", leanProblems));

@@ -2075,6 +2075,20 @@ namespace MailArchiver.Services.Core
                     }
                 }
 
+                // RawMessages:Required: no verified original, no archive entry. Lean ingest that could
+                // not verify (leanPlan null) counts as "no original" here; the upstream full-storage
+                // fallback would only keep the parsed copy.
+                {
+                    var refusal = RawMessageRequirement.RefusalReason(_rawMessageOptions, rawMessage);
+                    if (refusal == null && _rawMessageOptions.Required && _storageMode.IsLean && leanPlan == null)
+                        refusal = MetricsReasons.Failed;
+                    if (refusal != null)
+                    {
+                        RawMessageRequirement.LogRefused(_logger, subject, refusal, _metricsRecorder);
+                        return false;
+                    }
+                }
+
                 if (leanPlan != null)
                 {
                     var leanAttachments = new List<EmailAttachment>(emailAttachments.Count);

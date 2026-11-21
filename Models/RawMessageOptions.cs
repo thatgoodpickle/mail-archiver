@@ -13,6 +13,15 @@ namespace MailArchiver.Models
         public bool Enabled { get; set; } = false;
 
         /// <summary>
+        /// Fork: when true, an email whose original cannot be kept (no capture from the provider,
+        /// over the size limit, or lean ingest could not verify it) is NOT archived: it is logged,
+        /// counted in the metrics and reported as failed, so the next sync tries it again. Default
+        /// false keeps the upstream behaviour (archive without the original and log an error).
+        /// Requires <see cref="Enabled"/>.
+        /// </summary>
+        public bool Required { get; set; } = false;
+
+        /// <summary>
         /// Where the message bytes are kept: <see cref="RawMessageStorage.Postgres"/> (default,
         /// in the database) or <see cref="RawMessageStorage.FileSystem"/> (a file next to the
         /// archive). The metadata row - checksum, size, capture source - stays in the database

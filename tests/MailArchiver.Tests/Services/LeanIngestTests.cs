@@ -51,6 +51,42 @@ public class StorageModeOptionsTests
         => Assert.Single(new StorageModeOptions { Mode = "Leen" }.Validate(Good()));
 }
 
+public class RawMessageRequirementTests
+{
+    private static RawMessageCapture Cap(int n = 100) => new(new byte[n].Select((_, i) => (byte)(i + 1)).ToArray(), RawMessageSource.Imap);
+
+    [Fact]
+    public void NotRequired_NeverRefuses()
+    {
+        var o = new RawMessageOptions { Enabled = true };
+        Assert.Null(RawMessageRequirement.RefusalReason(o, null));
+    }
+
+    [Fact]
+    public void Required_RefusesMissingOrEmptyCapture()
+    {
+        var o = new RawMessageOptions { Enabled = true, Required = true };
+        Assert.Equal("no_capture", RawMessageRequirement.RefusalReason(o, null));
+        Assert.Equal("no_capture", RawMessageRequirement.RefusalReason(o, new RawMessageCapture(Array.Empty<byte>(), RawMessageSource.Imap)));
+    }
+
+    [Fact]
+    public void Required_RefusesOverTheSizeLimit_AndAcceptsWithinIt()
+    {
+        var o = new RawMessageOptions { Enabled = true, Required = true, MaxMessageSizeMb = 1 };
+        Assert.Equal("size", RawMessageRequirement.RefusalReason(o, Cap(1024 * 1024 + 1)));
+        Assert.Null(RawMessageRequirement.RefusalReason(o, Cap(1024)));
+    }
+
+    [Fact]
+    public void Required_WithoutEnabled_IsAStartupProblem()
+    {
+        Assert.Single(RawMessageRequirement.Validate(new RawMessageOptions { Required = true }));
+        Assert.Empty(RawMessageRequirement.Validate(new RawMessageOptions { Required = true, Enabled = true }));
+        Assert.Empty(RawMessageRequirement.Validate(new RawMessageOptions()));
+    }
+}
+
 /// <summary>Lean ingest and the full archive -> read-back round trip. Synthetic mail only.</summary>
 [Collection(TestDbFixture.CollectionName)]
 public class LeanIngestTests : IDisposable
@@ -275,5 +311,66 @@ public class LeanIngestTests : IDisposable
             try { File.Delete(_root); } catch { }
             await ctx.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task Required_NoCapture_RefusesTheEmail_AndSavesNothing()
+    {
+        var ctx = NewContext();
+        var account = await SeedAccountAsync(ctx);
+        try
+        {
+            var (msg, _, _) = BuildMail();
+            var raw = Options_(); raw.Required = true;
+            var (svc, _, _) = Make(ctx, raw);
+
+            Assert.False(await svc.ArchiveEmailAsync(account, msg, false, "INBOX", rawMessage: null));
+
+            ctx.ChangeTracker.Clear();
+            Assert.Equal(0, await ctx.ArchivedEmails.CountAsync(e => e.MailAccountId == account.Id));
+        }
+        finally { await CleanupAsync(ctx, account); }
+    }
+
+    [Fact]
+    public async Task Required_LeanVerificationFails_RefusesInsteadOfStoringInFull()
+    {
+        var ctx = NewContext();
+        var account = await SeedAccountAsync(ctx);
+        try
+        {
+            var (msg, bytes, _) = BuildMail();
+            var raw = Options_(); raw.Required = true;
+            // Break the original on disk's destination so the verified write cannot succeed.
+            Directory.CreateDirectory(_root);
+            File.WriteAllText(Path.Combine(_root, RawMessageCodec.ComputeSha256(bytes).Substring(0, 2)), "not a directory");
+            var (svc, _, _) = Make(ctx, raw);
+
+            Assert.False(await svc.ArchiveEmailAsync(account, msg, false, "INBOX", new RawMessageCapture(bytes, RawMessageSource.Imap)));
+
+            ctx.ChangeTracker.Clear();
+            Assert.Equal(0, await ctx.ArchivedEmails.CountAsync(e => e.MailAccountId == account.Id));
+        }
+        finally { await CleanupAsync(ctx, account); }
+    }
+
+    [Fact]
+    public async Task Required_WithAnOriginal_ArchivesAsBefore()
+    {
+        var ctx = NewContext();
+        var account = await SeedAccountAsync(ctx);
+        try
+        {
+            var (msg, bytes, _) = BuildMail();
+            var raw = Options_(); raw.Required = true;
+            var (svc, _, _) = Make(ctx, raw);
+
+            Assert.True(await svc.ArchiveEmailAsync(account, msg, false, "INBOX", new RawMessageCapture(bytes, RawMessageSource.Imap)));
+
+            ctx.ChangeTracker.Clear();
+            var email = await ctx.ArchivedEmails.SingleAsync(e => e.MailAccountId == account.Id);
+            Assert.True(email.ContentStripped);
+        }
+        finally { await CleanupAsync(ctx, account); }
     }
 }
