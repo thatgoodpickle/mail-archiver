@@ -36,6 +36,13 @@ namespace MailArchiver.Migrations
                 ALTER TABLE mail_archiver.""ArchivedEmails"" ADD COLUMN IF NOT EXISTS ""AttachmentTextAt"" timestamp without time zone NULL;
             ");
 
+            // The worker's queue: emails with attachments whose text has not been collected yet.
+            migrationBuilder.Sql(@"
+                CREATE INDEX IF NOT EXISTS ""IX_ArchivedEmails_AttachmentTextPending""
+                ON mail_archiver.""ArchivedEmails"" (""Id"")
+                WHERE ""HasAttachments"" AND ""AttachmentTextAt"" IS NULL;
+            ");
+
             migrationBuilder.Sql(@"
                 CREATE OR REPLACE FUNCTION mail_archiver.prevent_locked_email_changes()
                 RETURNS TRIGGER AS $$
@@ -79,6 +86,8 @@ namespace MailArchiver.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.Sql(@"DROP INDEX IF EXISTS mail_archiver.""IX_ArchivedEmails_AttachmentTextPending"";");
+
             migrationBuilder.Sql(@"
                 CREATE INDEX IF NOT EXISTS ""idx_archivedemails_fulltext_search""
                 ON mail_archiver.""ArchivedEmails""

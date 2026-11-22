@@ -508,6 +508,10 @@ builder.Services.AddSingleton<MailArchiver.Services.Shared.IAuditChain, MailArch
 builder.Services.AddSingleton<MailArchiver.Services.Shared.AuditChainInterceptor>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.IAuditChainVerifier, MailArchiver.Services.Shared.AuditChainVerifier>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.IManifestService, MailArchiver.Services.Shared.ManifestService>();
+// Fork: attachment text for search (Ocr:Mode off by default; no OCR engine yet, text layer only).
+builder.Services.Configure<MailArchiver.Models.AttachmentTextOptions>(builder.Configuration.GetSection(MailArchiver.Models.AttachmentTextOptions.Section));
+builder.Services.AddScoped<MailArchiver.Services.Shared.IAttachmentTextProcessor, MailArchiver.Services.Shared.AttachmentTextProcessor>();
+builder.Services.AddHostedService<MailArchiver.Services.Shared.AttachmentTextWorker>();
 builder.Services.AddSingleton<MailArchiver.Services.Shared.IIntegrityRunner, MailArchiver.Services.Shared.IntegrityRunner>();
 builder.Services.AddHostedService<MailArchiver.Services.Shared.IntegrityScheduleService>();
 
