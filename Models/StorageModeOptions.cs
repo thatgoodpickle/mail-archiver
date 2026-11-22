@@ -6,8 +6,10 @@ namespace MailArchiver.Models
     /// its SHA-256), read back and verified, and the database keeps only the search text, the list
     /// fields and, per attachment, its name, size, MIME part path and SHA-256. The HTML body, the
     /// untruncated body variants and the attachment bytes live only in the original and are read
-    /// from it on demand. See doc/INTEGRITY-DESIGN.md. An email that fails any step of the check is
-    /// stored in full, the upstream way, and logged: nothing is ever dropped without proof.
+    /// from it on demand. See doc/INTEGRITY-DESIGN.md. An email that fails any step of the lean check is
+    /// stored in full, the upstream way (with its verified original when that could be written), and logged.
+    /// With RawMessages:Required an email is refused only when no verified original exists; a refused email
+    /// counts as failed and is read again on the next sync.
     /// </summary>
     public class StorageModeOptions
     {

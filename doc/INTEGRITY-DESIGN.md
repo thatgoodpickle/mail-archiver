@@ -40,10 +40,10 @@ proven at any time. Mbox import is out of scope (its copy is re-serialized, see
    needs its own search source (a column or small table filled at ingest from the parsed
    original, with the GIN index on it) and the query code switched to it. Dropping
    `HtmlBody` and attachment bytes is the cheap part.
-2. **`IsLocked` is weaker than it looks.** The trigger `prevent_locked_email_changes` only
-   rejects changes to `Subject`, `Body`, `From`, `To` and `ContentHash` on a locked row (not
-   `HtmlBody`, `Cc`, `Bcc`, dates, folder or attachments; the earlier "any change except
-   IsLocked/FolderName" wording was wrong), and a second trigger blocks deleting locked rows.
+2. **`IsLocked` is weaker than it looks.** (Corrected 2026-11-22: the current upstream trigger function,
+   migration 20260710120000, compares the WHOLE row except `IsLocked` and `FolderName` and, in this fork,
+   the derived `AttachmentText`/`AttachmentTextAt` columns; the five-field list that stood here was stale.)
+   A second trigger blocks deleting locked rows.
    But account deletion (`MailAccountsController`, ~line 1422) first sets `IsLocked=false`
    for every email of the account, then deletes them, and the deletion policy can change the
    flag at startup. So it is a guard against accidental edits, not an audit control. It does
@@ -158,8 +158,9 @@ verify also refuses; startup check that Required needs Enabled); Phase 2:
 - **Known limits, stated plainly:** root on the archive machine can re-sign and rewrite the chain
   together; only a copy of the chain head (seq + hash) and the public key held elsewhere defeats that.
   A failed chain append is logged but does not block the action; the verifier reports unchained emails.
-  A non-lean Required email whose original write fails AFTER the row is saved stays in the archive without
-  its original (lean mode writes the original first, so it cannot happen there); verify-all reports it as NotStored.
+  (Corrected 2026-11-22: a failed original write after the row was saved used to leave the email without its
+  original; under Required the row is now removed again and the email counts as failed, and the half-written
+  original row is dropped. Lean, EML and Graph lean paths write and verify the original BEFORE the row.)
 
 ### Lean storage for imports and Graph (2026-11-22, CI green, 1428 tests)
 
@@ -290,6 +291,68 @@ photos are untested on real material; the GPU variants (CUDA, ROCm, OpenVINO) ar
 beyond the 90-degree turn of tall crops; the C# engine itself has not been run on the user's real screenshots (parity argument
 above); search remains whole-word/prefix, so OCR misreads of a word make it unfindable.
 
+### Review fixes (2026-11-22): the audit claim, exactly, and what changed
+
+An independent review (REVIEW-opus-2026-11-22.md, 27 findings) found that the checks said more than they
+proved. These are the corrected statements; REVIEW-fixes-status.md lists every finding and its state.
+
+**The audit claim, in exactly this wording.** For every email that has a stored original, the archive can
+show that (1) the original's bytes match the SHA-256 recorded when it was stored (re-hashed on every check);
+(2) that hash is the one the append-only audit chain recorded at that time (emails stored before the chain was
+switched on are reported as *Unchained*, which is informational: the chain adds nothing for them);
+(3) the fields the application shows and serves from the database agree with the original: subject, sender,
+recipients, display names, sent date (within 2 seconds), the text body (up to 100 KB), the HTML body and
+original-body copies, and for every attachment its bytes (hashed again), name, type and size, plus that every
+real attachment part of the original has a database counterpart; a lean email must carry no HTML body, no body
+copy and no attachment bytes. Fields that cannot be compared exactly are listed as *not compared* (Graph rows
+take display names, dates, HTML and the attachment list from the Graph API; very large bodies are stored
+truncated). Originals are byte-exact as held by the mail server at capture time, except those labelled source
+`serialized` (mbox import, IMAP recovery fetch), which are intact but re-written by the parser. Email
+deletions and every access-log row are recorded in the chain, and a manifest lists every original.
+
+**What this does and does not protect against.** It protects against mistakes, software faults, and changes by
+anyone who does NOT hold the application's database credentials, host file access or code execution inside the
+application. Someone who does can rewrite the originals, the database, the chain and the manifests together
+(the chain has no secret and the app holds the signing key). Only a copy of the chain head and of the manifest
+public key kept off this host (`tools/pull-anchor.sh`, `tools/compare-manifests.py --pubkey-sha256`) can reveal
+that, and only for changes made after the last collection. The append-only trigger stops mistakes and non-owner
+changes; the table owner (the shipped compose file uses the Postgres superuser) can switch it off.
+
+**Verdicts.** Valid / Invalid (bytes or encoding damaged, including truncated, non-gzip and oversized files) /
+Missing (the original or its record is gone, including when the chain says one was stored) / NotStored /
+Inconsistent (database copy differs) / ChainMismatch (the row's hash is not the one the chain recorded). The
+verify-all run counts ChainMismatch and Unchained.
+
+**Behaviour changes.** A refused or failed email is a failed email: the sync does not move past it. Required
+refuses only when no verified original exists (a calendar invite or an attachment that cannot be found again is
+stored in full WITH its verified original); re-serialized originals are refused under Required unless
+`Storage:AllowSerializedImports` is set. Every deletion path is recorded by a database trigger in the same
+transaction (`email.deleted`: id, hash of the original, account, database user, reason if the session set
+`mailarchiver.delete_reason`). The storage migration filesystem to database is refused for hash-named or lean
+archives unless `Storage:AllowHashNamedMigration`, and never deletes a shared file. The manifest signing key
+defaults to the DataProtection key directory (not beside the manifests), is created 0600, and is never
+re-created while manifests exist unless `Integrity:AllowNewKey`.
+
+**Known limits and manual steps.**
+- *Deployment (F-06).* The shipped compose file runs the app as the container's default user with the Postgres
+  superuser. To reduce the exposure: run the app container with `user: "<uid>:<gid>"` that owns the mounted
+  folders; connect the application as a role that is not the owner of `AuditChain` (create it with
+  `CREATE ROLE app LOGIN PASSWORD ...; GRANT USAGE ON SCHEMA mail_archiver TO app; GRANT SELECT, INSERT ON mail_archiver."AuditChain" TO app;`
+  and the usual table rights on the rest, and run migrations with the owner role). Not done by default because it
+  needs testing on the real stack and a migration role.
+- *Index build (F-17).* The migration `AddAttachmentText` replaces the full-text index with a plain
+  `CREATE INDEX`, which blocks writes on `ArchivedEmails` while it builds. On a large archive run, BEFORE
+  upgrading, `CREATE INDEX CONCURRENTLY idx_archivedemails_fulltext_search_v2 ON mail_archiver."ArchivedEmails" USING gin (...)`
+  with the expression from that migration; the migration then finds it present. (A shipped migration is not edited.)
+- *One instance (F-13).* verify-all and the background workers assume one application instance.
+- *Rollbacks (F-26).* Down methods of the shipped migrations drop audit and lean data; rolling back past them is
+  not supported. Restore from a backup instead (doc/BackupVerification.md).
+- *Untrusted attachments (F-14).* Text and picture extraction run inside the application process with time and
+  size limits; a hostile file can still exhaust it. Running the worker in its own container is the remedy and is
+  not built yet.
+- *Decisions waiting for the user:* F-11 (what deleting an email does to its hash-named original) and F-21 (a
+  versioned chain hash input). See REVIEW-fixes-status.md.
+
 ## Phase 1: make the original mandatory, prove it
 
 1. `RawMessages:Required` (default false, so upstream behaviour is unchanged): when true,
@@ -302,10 +365,10 @@ above); search remains whole-word/prefix, so OCR misreads of a word make it unfi
    *parsed* copy (bodies, headers, attachment list), but the SHA-256 covers only the
    original. Without this check, someone editing `Body`/`HtmlBody` in Postgres would
    still see "Valid". The verify service therefore re-parses the stored original with
-   MimeKit and compares it with the stored fields (subject, from/to/cc/bcc, dates,
-   text and HTML bodies, attachment names/sizes) and hashes each attachment MIME part
-   against the linked `AttachmentContent.Hash`. Any difference => **Inconsistent**.
-   This is what makes the parsed copy provably derived from the original.
+   MimeKit and compares it with the stored fields. (Corrected 2026-11-22: the first build did NOT
+   compare dates, HTML bodies, display names or attachment names/sizes; it does now, see
+   "Review fixes" below for exactly what is compared and what is listed as not compared.)
+   Any difference => **Inconsistent**.
 3. Email detail page: "Integrity report" panel with that result (same idea as Open
    Archiver's badge), plus source (imap/graph/eml-file) and hash.
 4. API + MCP: `GET /api/v1/emails/{id}/integrity` and an `get_email_integrity` tool.
