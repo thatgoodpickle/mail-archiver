@@ -86,10 +86,13 @@ public class HashNamedRawMessageStoreTests : IDisposable
         var absolute = paths.GetAbsolutePath(row1.StoragePath!);
         Assert.True(File.Exists(absolute));
         var firstWrite = File.GetLastWriteTimeUtc(absolute);
+        var firstBytes = await File.ReadAllBytesAsync(absolute);
 
         await Task.Delay(50);
         await store.PersistAsync(row2, capture); // second email, same bytes: verified, not rewritten
-        Assert.Equal(firstWrite, File.GetLastWriteTimeUtc(absolute));
+        Assert.Equal(firstBytes, await File.ReadAllBytesAsync(absolute));
+        // F-11: a reused file is touched so the original bin sees it as in use; its content is not rewritten.
+        Assert.True(File.GetLastWriteTimeUtc(absolute) > firstWrite);
         Assert.Single(Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories));
     }
 
