@@ -1220,7 +1220,13 @@ namespace MailArchiver.Services.Providers.Imap
                                     }
                                 }
 
-                                var isNew = await _coreService.ArchiveEmailAsync(account, message, isOutgoing, folder.FullName, rawMessage);
+                                // Fork (F-01): a refused or failed email must not look like a duplicate. Throwing here
+                                // runs the same failure handling as any other error below: FailedEmails++ and the
+                                // watermark/LastSync stay put, so the message is fetched again on the next run.
+                                var outcome = await _coreService.ArchiveEmailOutcomeAsync(account, message, isOutgoing, folder.FullName, rawMessage);
+                                if (outcome is ArchiveOutcome.Refused or ArchiveOutcome.Failed)
+                                    throw new ArchiveNotStoredException(outcome);
+                                var isNew = outcome == ArchiveOutcome.Archived;
                                 if (isNew)
                                 {
                                     result.NewEmails++;

@@ -773,8 +773,13 @@ namespace MailArchiver.Services.Providers.Graph
                         }
                     }
 
-                    var isNew = await _archiver.ArchiveGraphEmailAsync(graphClient, account, fullMessage, isOutgoing, folderNameForStorage,
+                    // Fork (F-01): a refused or failed email is a failed email (the catch below counts it and
+                    // LastSync stays), never "already archived".
+                    var outcome = await _archiver.ArchiveGraphEmailOutcomeAsync(graphClient, account, fullMessage, isOutgoing, folderNameForStorage,
                         skipDuplicateCheck: duplicateCheckDone);
+                    if (outcome is ArchiveOutcome.Refused or ArchiveOutcome.Failed)
+                        throw new ArchiveNotStoredException(outcome);
+                    var isNew = outcome == ArchiveOutcome.Archived;
                     if (isNew)
                         result.NewEmails++;
 

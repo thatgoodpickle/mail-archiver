@@ -1687,6 +1687,15 @@ namespace MailArchiver.Services.Core
 
         public async Task<bool> ArchiveEmailAsync(MailAccount account, MimeMessage message, bool isOutgoing, string? folderName = null,
             RawMessageCapture? rawMessage = null)
+            => await ArchiveEmailOutcomeAsync(account, message, isOutgoing, folderName, rawMessage) == ArchiveOutcome.Archived;
+
+        /// <summary>
+        /// Same as <see cref="ArchiveEmailAsync"/> but says WHY nothing was stored (fork, review finding F-01):
+        /// a sync must treat <see cref="ArchiveOutcome.Refused"/> and <see cref="ArchiveOutcome.Failed"/> as failed
+        /// emails (watermark stays), not as "already archived".
+        /// </summary>
+        public async Task<ArchiveOutcome> ArchiveEmailOutcomeAsync(MailAccount account, MimeMessage message, bool isOutgoing, string? folderName = null,
+            RawMessageCapture? rawMessage = null)
         {
             // Extract date with fallback handling for malformed Date headers
             var emailDate = MailContentHelper.ExtractEmailDate(message.Date, message.Headers);
@@ -1777,7 +1786,7 @@ namespace MailArchiver.Services.Core
 
                 _logger.LogDebug("Skipping already archived email: MessageId={MessageId}, Folder={FolderName}, Account={AccountName}",
                     messageId, cleanFolderName, account.Name);
-                return false; // E-Mail existiert bereits
+                return ArchiveOutcome.Duplicate; // E-Mail existiert bereits
             }
 
             try
@@ -2072,13 +2081,18 @@ namespace MailArchiver.Services.Core
                 if (leanDecision.RefusalReason != null)
                 {
                     RawMessageRequirement.LogRefused(_logger, subject, leanDecision.RefusalReason, _metricsRecorder);
-                    return false;
+                    return ArchiveOutcome.Refused;
                 }
 
                 var leanPlan = leanDecision.Plan;
                 if (leanPlan != null)
                 {
                     LeanArchive.Apply(archivedEmail, emailAttachments, leanPlan);
+                }
+                else if (leanDecision.OriginalOnlyRow != null)
+                {
+                    // Stored in full, original already written and verified: it goes in with the email (F-02).
+                    archivedEmail.RawMessage = leanDecision.OriginalOnlyRow;
                 }
 
                 try
@@ -2089,11 +2103,17 @@ namespace MailArchiver.Services.Core
                     // The row is in place, so the id exists; a filesystem-backed original is
                     // written now and its metadata row added in a second save. Lean emails already
                     // carry their verified original row.
-                    var storedRaw = leanPlan != null ? null : _rawMessageStore.CreateRow(archivedEmail.Id, rawMessage);
+                    var originalAlreadyAttached = leanPlan != null || leanDecision.OriginalOnlyRow != null;
+                    var storedRaw = originalAlreadyAttached ? null : _rawMessageStore.CreateRow(archivedEmail.Id, rawMessage);
                     if (leanPlan != null)
                     {
                         _logger.LogInformation("Archived lean: '{Subject}' ({Count} attachments kept only in the original {Path})",
                             archivedEmail.Subject, archivedEmail.Attachments.Count, leanPlan.Row.StoragePath);
+                    }
+                    else if (leanDecision.OriginalOnlyRow != null)
+                    {
+                        _logger.LogInformation("Archived in full with its verified original: '{Subject}' ({Path})",
+                            archivedEmail.Subject, leanDecision.OriginalOnlyRow.StoragePath);
                     }
                     else if (storedRaw != null)
                     {
@@ -2108,6 +2128,15 @@ namespace MailArchiver.Services.Core
                             RawMessageLogging.LogPersistFailure(
                                 _logger, rawEx, archivedEmail.Id, subject, storedRaw.StorageType,
                                 _metricsRecorder);
+                            // F-19: the half-written row must not be saved later by an unrelated SaveChanges
+                            // (it would be chained as stored although the file was never written).
+                            _context.Entry(storedRaw).State = EntityState.Detached;
+                            archivedEmail.RawMessage = null;
+                            if (_rawMessageOptions.Required)
+                            {
+                                // Required means no email without its original: take the committed row back out.
+                                await RemoveUnstoredEmailAsync(archivedEmail);
+                            }
                             throw;
                         }
                     }
@@ -2125,19 +2154,36 @@ namespace MailArchiver.Services.Core
                         "Archived email: {Subject}, From: {From}, To: {To}, Account: {AccountName}, Attachments: {AttachmentCount}",
                         archivedEmail.Subject, archivedEmail.From, archivedEmail.To, account.Name, allAttachments.Count);
 
-                    return true; // Neue E-Mail erfolgreich archiviert
+                    return ArchiveOutcome.Archived; // Neue E-Mail erfolgreich archiviert
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error saving archived email to database: {Subject}, {Message}", subject, ex.Message);
-                    return false;
+                    return ArchiveOutcome.Failed;
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error archiving email: Subject={Subject}, From={From}, Error={Message}",
                     message.Subject, message.From, ex.Message);
-                return false;
+                return ArchiveOutcome.Failed;
+            }
+        }
+
+        /// <summary>
+        /// RawMessages:Required (fork, F-19): the email row was committed but its original could not be
+        /// written, so the row is removed again and the email counts as failed (read again next run).
+        /// </summary>
+        private async Task RemoveUnstoredEmailAsync(ArchivedEmail email)
+        {
+            try
+            {
+                _context.ChangeTracker.Clear();
+                await _context.ArchivedEmails.Where(e => e.Id == email.Id).ExecuteDeleteAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Could not remove email {EmailId} after its original failed to write", email.Id);
             }
         }
 

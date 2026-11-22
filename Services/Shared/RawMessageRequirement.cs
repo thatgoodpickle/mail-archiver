@@ -32,7 +32,7 @@ namespace MailArchiver.Services.Shared
             metrics?.RawMessageNotStored(reason);
             logger.LogError(
                 "Email refused: RawMessages:Required is set and no verified original could be kept ({Reason}). " +
-                "Not archived: '{Subject}'. It is tried again on the next sync.",
+                "Not archived: '{Subject}'. It is counted as failed and never skipped: a sync reads it again on the next run, an import reports it as failed.",
                 reason, subject);
         }
 

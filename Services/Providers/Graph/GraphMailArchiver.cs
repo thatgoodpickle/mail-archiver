@@ -63,6 +63,20 @@ namespace MailArchiver.Services.Providers.Graph
             bool isOutgoing,
             string folderName,
             bool skipDuplicateCheck = false)
+            => await ArchiveGraphEmailOutcomeAsync(graphClient, account, message, isOutgoing, folderName, skipDuplicateCheck)
+                == ArchiveOutcome.Archived;
+
+        /// <summary>
+        /// Same as <see cref="ArchiveGraphEmailAsync"/> but says why nothing was stored (fork, review finding F-01),
+        /// so the sync can count a refused or failed email as failed instead of as a duplicate.
+        /// </summary>
+        public async Task<ArchiveOutcome> ArchiveGraphEmailOutcomeAsync(
+            GraphServiceClient graphClient,
+            MailAccount account,
+            Message message,
+            bool isOutgoing,
+            string folderName,
+            bool skipDuplicateCheck = false)
         {
             var messageId = ResolveMessageId(message);
 
@@ -74,7 +88,7 @@ namespace MailArchiver.Services.Providers.Graph
             {
                 var isDuplicate = await IsDuplicateAsync(account.Id, messageId, message, folderName);
                 if (isDuplicate)
-                    return false;
+                    return ArchiveOutcome.Duplicate;
             }
 
             // Build and persist the archived email
@@ -95,22 +109,29 @@ namespace MailArchiver.Services.Providers.Graph
                 if (leanDecision.RefusalReason != null)
                 {
                     RawMessageRequirement.LogRefused(_logger, archivedEmail.Subject, leanDecision.RefusalReason, _metricsRecorder);
-                    return false;
+                    return ArchiveOutcome.Refused;
                 }
 
                 var leanPlan = leanDecision.Plan;
                 if (leanPlan != null) LeanArchive.Apply(archivedEmail, sourceAttachments, leanPlan);
+                else if (leanDecision.OriginalOnlyRow != null) archivedEmail.RawMessage = leanDecision.OriginalOnlyRow; // F-02
 
                 _context.ArchivedEmails.Add(archivedEmail);
                 await _context.SaveChangesAsync();
 
                 // The id exists now, so a filesystem-backed original can be written and its
                 // metadata row added (a lean email already carries its verified original row).
-                var storedRaw = leanPlan != null ? null : _rawMessageStore.CreateRow(archivedEmail.Id, rawCapture);
+                var originalAlreadyAttached = leanPlan != null || leanDecision.OriginalOnlyRow != null;
+                var storedRaw = originalAlreadyAttached ? null : _rawMessageStore.CreateRow(archivedEmail.Id, rawCapture);
                 if (leanPlan != null)
                 {
                     _logger.LogInformation("Archived lean: '{Subject}' ({Count} attachments kept only in the original {Path})",
                         archivedEmail.Subject, archivedEmail.Attachments.Count, leanPlan.Row.StoragePath);
+                }
+                else if (leanDecision.OriginalOnlyRow != null)
+                {
+                    _logger.LogInformation("Archived in full with its verified original: '{Subject}' ({Path})",
+                        archivedEmail.Subject, leanDecision.OriginalOnlyRow.StoragePath);
                 }
                 else if (storedRaw != null)
                 {
@@ -125,6 +146,15 @@ namespace MailArchiver.Services.Providers.Graph
                         RawMessageLogging.LogPersistFailure(
                             _logger, rawEx, archivedEmail.Id, archivedEmail.Subject, storedRaw.StorageType,
                             _metricsRecorder);
+                        // F-19: drop the half-written row; under Required the email goes too (original or nothing).
+                        _context.Entry(storedRaw).State = EntityState.Detached;
+                        archivedEmail.RawMessage = null;
+                        if (_rawMessageOptions.Required)
+                        {
+                            var emailId = archivedEmail.Id;
+                            _context.ChangeTracker.Clear();
+                            await _context.ArchivedEmails.Where(e => e.Id == emailId).ExecuteDeleteAsync();
+                        }
                         throw;
                     }
                 }
@@ -144,13 +174,13 @@ namespace MailArchiver.Services.Providers.Graph
                 _logger.LogInformation("Archived Graph API email: {Subject}, From: {From}, To: {To}, Account: {AccountName}, Attachments: {AttachmentCount}",
                     archivedEmail.Subject, archivedEmail.From, archivedEmail.To, account.Name, attachmentCount);
 
-                return true;
+                return ArchiveOutcome.Archived;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error archiving Graph API email: Subject={Subject}, From={From}, Error={Message}",
                     message.Subject, message.From?.EmailAddress?.Address, ex.Message);
-                return false;
+                return ArchiveOutcome.Failed;
             }
         }
 

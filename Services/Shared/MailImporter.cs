@@ -260,6 +260,7 @@ namespace MailArchiver.Services.Shared
 
                 var leanPlan = leanDecision.Plan;
                 if (leanPlan != null) LeanArchive.Apply(archivedEmail, sourceAttachments, leanPlan);
+                else if (leanDecision.OriginalOnlyRow != null) archivedEmail.RawMessage = leanDecision.OriginalOnlyRow; // F-02
 
                 // The row goes in first: the filesystem backend keys its file by the email id,
                 // which the database assigns. A Postgres-backed row carries its bytes along (and a lean
@@ -274,12 +275,35 @@ namespace MailArchiver.Services.Shared
                     return ImportResult.CreateSuccess();
                 }
 
+                if (leanDecision.OriginalOnlyRow != null)
+                {
+                    _logger.LogInformation("Job {JobId}: imported in full with its verified original: '{Subject}' ({Path})",
+                        jobId, archivedEmail.Subject, leanDecision.OriginalOnlyRow.StoragePath);
+                    return ImportResult.CreateSuccess();
+                }
+
                 var storedRaw = _rawMessageStore.CreateRow(archivedEmail.Id, rawMessage);
                 if (storedRaw != null)
                 {
                     archivedEmail.RawMessage = storedRaw;
-                    await _rawMessageStore.PersistAsync(storedRaw, rawMessage);
-                    await context.SaveChangesAsync();
+                    try
+                    {
+                        await _rawMessageStore.PersistAsync(storedRaw, rawMessage);
+                        await context.SaveChangesAsync();
+                    }
+                    catch
+                    {
+                        // F-19: no half-written original row; under Required the email goes too.
+                        context.Entry(storedRaw).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                        archivedEmail.RawMessage = null;
+                        if (_rawMessageOptions.Required)
+                        {
+                            var emailId = archivedEmail.Id;
+                            context.ChangeTracker.Clear();
+                            await context.ArchivedEmails.Where(e => e.Id == emailId).ExecuteDeleteAsync();
+                        }
+                        throw;
+                    }
                 }
 
                 return ImportResult.CreateSuccess();

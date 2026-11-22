@@ -33,7 +33,12 @@ namespace MailArchiver.Services.Shared
     }
 
     /// <summary>What to do with one incoming email in lean mode: a verified plan, or a reason to refuse it.</summary>
-    public sealed record LeanArchiveDecision(LeanIngestPlan? Plan, string? RefusalReason);
+    /// <param name="OriginalOnlyRow">
+    /// Set when the email cannot be stored lean (it carries synthesized content that is not a part of the
+    /// original) but the original WAS written and verified: the email is stored in full and this row is
+    /// inserted together with it, so the original exists before the email does (review finding F-02).
+    /// </param>
+    public sealed record LeanArchiveDecision(LeanIngestPlan? Plan, string? RefusalReason, RawMessage? OriginalOnlyRow = null);
 
     /// <summary>
     /// The lean-storage decision and the lean row shape, shared by every archive path (IMAP sync,
@@ -65,11 +70,15 @@ namespace MailArchiver.Services.Shared
             string? subject)
         {
             LeanIngestPlan? plan = null;
+            RawMessage? originalOnly = null;
             if (storageMode.IsLean && ingest != null && capture != null)
             {
                 if (synthesizedContent)
                 {
-                    logger.LogWarning("Lean ingest skipped for '{Subject}': it carries a synthesized calendar attachment; stored in full", subject);
+                    // Stored in full, but the original is still written and verified FIRST (no attachments
+                    // to find again), so RawMessages:Required is satisfied and no ghost row can appear.
+                    logger.LogWarning("Lean ingest skipped for '{Subject}': it carries a synthesized calendar attachment; stored in full with its verified original", subject);
+                    originalOnly = (await ingest.TryPrepareAsync(capture, Array.Empty<byte[]>()))?.Row;
                 }
                 else
                 {
@@ -82,11 +91,12 @@ namespace MailArchiver.Services.Shared
             // RawMessages:Required: no verified original, no archive entry. Lean ingest that could not
             // verify (no plan) counts as "no original"; the full-storage fallback would only keep the
             // parsed copy.
+            // Rule (F-02): refuse only when NO verified original exists.
             var refusal = RawMessageRequirement.RefusalReason(raw, capture);
-            if (refusal == null && raw.Required && storageMode.IsLean && plan == null)
+            if (refusal == null && raw.Required && storageMode.IsLean && plan == null && originalOnly == null)
                 refusal = MetricsReasons.Failed;
 
-            return new LeanArchiveDecision(plan, refusal);
+            return new LeanArchiveDecision(plan, refusal, plan == null ? originalOnly : null);
         }
 
         /// <summary>
