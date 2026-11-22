@@ -59,7 +59,7 @@ internal sealed class RecordingAccessLog : IAccessLogService
 [Collection(TestDbFixture.CollectionName)]
 public class AppSettingsTests : IAsyncLifetime
 {
-    private const string EnvPrefix = "MAS_PIN_";
+    private const string EnvPrefix = SettingsKit.EnvPrefix;
     private readonly TestDbFixture _fixture;
     private readonly List<string> _envSet = new();
 
@@ -93,65 +93,8 @@ public class AppSettingsTests : IAsyncLifetime
         _envSet.Add(name);
     }
 
-    private sealed class Harness
-    {
-        public ServiceProvider Sp { get; init; } = null!;
-        public RecordingChain Chain { get; init; } = null!;
-        public RecordingAccessLog Log { get; init; } = null!;
-        public Mock<IUserService> Users { get; init; } = null!;
-        public ISettingsSnapshot Snapshot => Sp.GetRequiredService<ISettingsSnapshot>();
-        public IOptionsMonitor<T> Mon<T>() where T : class => Sp.GetRequiredService<IOptionsMonitor<T>>();
-
-        public async Task<SettingChangeResult> ChangeAsync(string key, string? value, string? password = null, bool reset = false, int userId = 1, string user = "admin")
-        {
-            using var scope = Sp.CreateScope();
-            return await scope.ServiceProvider.GetRequiredService<ISettingsService>()
-                .ChangeAsync(key, value, new SettingActor(userId, user), password, reset);
-        }
-
-        public async Task<SettingView> ViewAsync(string key)
-        {
-            using var scope = Sp.CreateScope();
-            var all = await scope.ServiceProvider.GetRequiredService<ISettingsService>().GetAllAsync();
-            return all.Single(s => s.Key == key);
-        }
-
-        public async Task ReloadAsync() => await SettingsLoader.LoadAsync(Sp, NullLogger.Instance);
-    }
-
-    private Harness NewHarness(Dictionary<string, string?>? extra = null, Action<Mock<IUserService>>? users = null, bool chainFails = false)
-    {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(extra ?? new Dictionary<string, string?>())
-            .AddEnvironmentVariables(EnvPrefix)
-            .Build();
-
-        var chain = new RecordingChain { Fail = chainFails };
-        var log = new RecordingAccessLog();
-        var userMock = new Mock<IUserService>();
-        userMock.Setup(u => u.GetUserByIdAsync(It.IsAny<int>())).ReturnsAsync((int id) => new User { Id = id, Username = "admin", PasswordHash = "hash" });
-        userMock.Setup(u => u.VerifyPassword("secret", "hash")).Returns(true);
-        users?.Invoke(userMock);
-
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddSingleton<IConfiguration>(config);
-        services.Configure<IntegrityOptions>(config.GetSection(IntegrityOptions.Section));
-        services.Configure<RawMessageOptions>(config.GetSection(RawMessageOptions.RawMessages));
-        services.Configure<AttachmentTextOptions>(config.GetSection(AttachmentTextOptions.Section));
-        services.Configure<StorageModeOptions>(config.GetSection(StorageModeOptions.Section));
-        services.AddSingleton<ISettingsSnapshot, SettingsSnapshot>();
-        services.AddSingleton<SettingsPins>();
-        services.AddSingleton<IPostConfigureOptions<IntegrityOptions>, SettingsOverlay<IntegrityOptions>>();
-        services.AddSingleton<IPostConfigureOptions<RawMessageOptions>, SettingsOverlay<RawMessageOptions>>();
-        services.AddSingleton<IPostConfigureOptions<AttachmentTextOptions>, SettingsOverlay<AttachmentTextOptions>>();
-        services.AddScoped(_ => NewContext());
-        services.AddSingleton<IAuditChain>(chain);
-        services.AddSingleton<IAccessLogService>(log);
-        services.AddSingleton(userMock.Object);
-        services.AddScoped<ISettingsService, SettingsService>();
-        return new Harness { Sp = services.BuildServiceProvider(), Chain = chain, Log = log, Users = userMock };
-    }
+    private SettingsHarness NewHarness(Dictionary<string, string?>? extra = null, Action<Mock<IUserService>>? users = null, bool chainFails = false)
+        => SettingsKit.Create(_fixture.ConnectionString, extra, users, chainFails);
 
     private async Task<string?> StoredAsync(string key)
     {
