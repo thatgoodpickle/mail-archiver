@@ -353,7 +353,7 @@
         if (!btn) return;
         var badge = document.getElementById('integrityStatus');
         var detail = document.getElementById('integrityDetail');
-        var classes = { Valid: 'bg-success', Invalid: 'bg-danger', Missing: 'bg-danger', Inconsistent: 'bg-warning text-dark', NotStored: 'bg-secondary' };
+        var classes = { Valid: 'bg-success', Invalid: 'bg-danger', Missing: 'bg-danger', Inconsistent: 'bg-warning text-dark', ChainMismatch: 'bg-danger', NotStored: 'bg-secondary' };
         function show(text, cls) {
             badge.className = 'badge ' + cls;
             badge.textContent = text;
@@ -370,6 +370,8 @@
                     var lines = [];
                     if (d.sha256) lines.push('SHA-256 of original: ' + d.sha256);
                     if (d.source) lines.push('Source: ' + d.source + (d.storage ? ', stored in ' + d.storage : '') + (d.lean ? ', lean copy' : ''));
+                    if (d.chainState) lines.push('Audit chain: ' + (d.chainState === 'Unchained' ? 'no entry (stored before the chain was switched on)' : d.chainState));
+                    (d.notCompared || []).forEach(function (n) { lines.push('Not compared: ' + String(n)); });
                     (d.findings || []).forEach(function (f) { lines.push(String(f)); });
                     detail.textContent = '';
                     lines.forEach(function (l) {

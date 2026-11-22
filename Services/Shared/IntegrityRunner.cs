@@ -112,7 +112,7 @@ namespace MailArchiver.Services.Shared
                         .ToListAsync(cancellationToken);
                     if (ids.Count == 0) break;
 
-                    int valid = 0, invalid = 0, missing = 0, notStored = 0, inconsistent = 0, errors = 0;
+                    int valid = 0, invalid = 0, missing = 0, notStored = 0, inconsistent = 0, chainMismatch = 0, unchained = 0, errors = 0;
                     var findings = new List<IntegrityFinding>();
 
                     foreach (var id in ids)
@@ -127,7 +127,9 @@ namespace MailArchiver.Services.Shared
                                 case IntegrityStatus.Missing: missing++; break;
                                 case IntegrityStatus.NotStored: notStored++; break;
                                 case IntegrityStatus.Inconsistent: inconsistent++; break;
+                                case IntegrityStatus.ChainMismatch: chainMismatch++; break;
                             }
+                            if (report.Status != IntegrityStatus.NotStored && report.ChainState == IntegrityChainState.Unchained) unchained++;
 
                             if (report.Status != IntegrityStatus.Valid)
                             {
@@ -159,6 +161,8 @@ namespace MailArchiver.Services.Shared
                         .SetProperty(r => r.Missing, r => r.Missing + missing)
                         .SetProperty(r => r.NotStored, r => r.NotStored + notStored)
                         .SetProperty(r => r.Inconsistent, r => r.Inconsistent + inconsistent)
+                        .SetProperty(r => r.ChainMismatch, r => r.ChainMismatch + chainMismatch)
+                        .SetProperty(r => r.Unchained, r => r.Unchained + unchained)
                         .SetProperty(r => r.Errors, r => r.Errors + errors), cancellationToken);
                 }
             }

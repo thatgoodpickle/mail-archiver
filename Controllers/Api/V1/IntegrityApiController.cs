@@ -37,7 +37,7 @@ public class IntegrityApiController : ApiControllerBase
     {
         id = r.Id, status = r.Status, startedAt = r.StartedAt, finishedAt = r.FinishedAt, startedBy = r.StartedBy,
         total = r.Total, @checked = r.Checked, valid = r.Valid, invalid = r.Invalid, missing = r.Missing,
-        notStored = r.NotStored, inconsistent = r.Inconsistent, errors = r.Errors, error = r.Error
+        notStored = r.NotStored, inconsistent = r.Inconsistent, chainMismatch = r.ChainMismatch, unchained = r.Unchained, errors = r.Errors, error = r.Error
     };
 
     /// <summary>
@@ -68,7 +68,9 @@ public class IntegrityApiController : ApiControllerBase
     {
         if (_chain == null) return Problem(statusCode: 501, title: "The audit chain is not available.");
         var head = await _chain.GetHeadAsync();
-        return head == null ? Ok(new { entries = 0, head = (object?)null }) : Ok(new { seq = head.Seq, hash = head.Hash, timestamp = head.Timestamp });
+        // failedAppends > 0 means audit entries could not be written since the application started (a gap in the trail).
+        var failed = AuditChain.FailedAppends;
+        return head == null ? Ok(new { entries = 0, head = (object?)null, failedAppends = failed }) : Ok(new { seq = head.Seq, hash = head.Hash, timestamp = head.Timestamp, failedAppends = failed });
     }
 
     /// <summary>
@@ -111,7 +113,9 @@ public class IntegrityApiController : ApiControllerBase
             head = r.Head == null ? null : new { seq = r.Head.Seq, hash = r.Head.Hash },
             firstBreak = r.FirstBreak == null ? null : new { seq = r.FirstBreak.Seq, reason = r.FirstBreak.Reason },
             warnings = r.Warnings,
-            emailsWithoutArchiveEntry = r.EmailsWithoutArchiveEntry
+            emailsWithoutArchiveEntry = r.EmailsWithoutArchiveEntry,
+            emailsDeletedWithRecord = r.EmailsDeletedWithRecord,
+            failedAppends = AuditChain.FailedAppends
         });
     }
 

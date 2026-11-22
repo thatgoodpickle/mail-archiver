@@ -48,12 +48,30 @@ namespace MailArchiver.Services.Shared
         /// </summary>
         public static byte[] Decompress(byte[] compressed, long expectedSize = 0)
         {
+            // Fork (review F-10): the recorded size is also the LIMIT, so a replaced file (a decompression bomb)
+            // or a tampered size column cannot make the application allocate without bound, and the output
+            // buffer is never pre-sized from a database value beyond a sane bound. Output that is larger than
+            // the recorded size is damage and surfaces as InvalidDataException (IntegrityService: Invalid).
+            var limit = expectedSize > 0 ? expectedSize : MaxDecompressedBytes;
             using var input = new MemoryStream(compressed);
             using var gzip = new GZipStream(input, CompressionMode.Decompress);
-            using var output = new MemoryStream(expectedSize > 0 && expectedSize < int.MaxValue ? (int)expectedSize : 0);
-            gzip.CopyTo(output);
+            using var output = new MemoryStream(expectedSize > 0 ? (int)Math.Min(expectedSize, MaxPreAllocatedBytes) : 0);
+            var buffer = new byte[81920];
+            int read;
+            while ((read = gzip.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (output.Length + read > limit)
+                    throw new InvalidDataException("The decompressed message is larger than its recorded size.");
+                output.Write(buffer, 0, read);
+            }
             return output.ToArray();
         }
+
+        /// <summary>Upper bound for a message whose size is not recorded (callers that pass no size).</summary>
+        public const long MaxDecompressedBytes = 1L * 1024 * 1024 * 1024;
+
+        // The pre-sized buffer never exceeds this, whatever the database says.
+        private const long MaxPreAllocatedBytes = 64L * 1024 * 1024;
 
         /// <summary>
         /// Whether the capture is to be stored at all: storage enabled, something captured, and

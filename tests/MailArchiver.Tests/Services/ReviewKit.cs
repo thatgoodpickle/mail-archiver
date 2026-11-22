@@ -6,8 +6,10 @@ using MailArchiver.Services.Shared;
 using MailArchiver.Tests.Infrastructure;
 using MailArchiver.Utilities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using MimeKit;
+using Npgsql;
 using Opt = Microsoft.Extensions.Options.Options;
 
 namespace MailArchiver.Tests.Services;
@@ -21,12 +23,48 @@ internal sealed class ReviewKit : IDisposable
 
     public void Dispose() { try { Directory.Delete(Root, recursive: true); } catch { } }
 
-    public MailArchiverDbContext NewContext()
-        => new(new DbContextOptionsBuilder<MailArchiverDbContext>()
+    private IAuditChain? _chain;
+
+    /// <summary>A chain writer whose own database scope uses plain contexts (no interceptors), like production's separate scope.</summary>
+    public IAuditChain Chain => _chain ??= BuildChain();
+
+    private IAuditChain BuildChain()
+    {
+        var services = new ServiceCollection();
+        services.AddScoped(_ => NewContext(withChain: false));
+        return new AuditChain(services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
+            Opt.Create(new IntegrityOptions()), NullLogger<AuditChain>.Instance);
+    }
+
+    /// <summary>A context like production's; with <paramref name="withChain"/> it also has the audit chain interceptor.</summary>
+    public MailArchiverDbContext NewContext(bool withChain = false)
+    {
+        var builder = new DbContextOptionsBuilder<MailArchiverDbContext>()
             .UseNpgsql(_fixture.ConnectionString, npgsql => npgsql.CommandTimeout(120))
             .AddInterceptors(new AttachmentDeduplicationInterceptor(NullLogger<AttachmentDeduplicationInterceptor>.Instance))
-            .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning))
-            .Options);
+            .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
+        if (withChain)
+            builder.AddInterceptors(new AuditChainInterceptor(new ServiceCollection().AddSingleton(Chain).BuildServiceProvider()));
+        return new MailArchiverDbContext(builder.Options);
+    }
+
+    /// <summary>Empties the global audit chain (tests in this collection run one at a time).</summary>
+    public async Task ResetChainAsync()
+    {
+        await using var c = new NpgsqlConnection(_fixture.ConnectionString);
+        await c.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"ALTER TABLE mail_archiver.""AuditChain"" DISABLE TRIGGER USER;
+            DELETE FROM mail_archiver.""AuditChain""; ALTER TABLE mail_archiver.""AuditChain"" ENABLE TRIGGER USER;", c);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async Task ExecAsync(string sql)
+    {
+        await using var c = new NpgsqlConnection(_fixture.ConnectionString);
+        await c.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, c);
+        await cmd.ExecuteNonQueryAsync();
+    }
 
     public sealed record Wired(EmailCoreService Svc, IntegrityService Integrity, IRawMessageStore Store, StrippedContentHydrator Hydrator, RawMessageOptions Raw);
 
@@ -41,13 +79,14 @@ internal sealed class ReviewKit : IDisposable
         var fs = new FileSystemRawMessageStore(ctx, opts, new RawMessagePathResolver(raw.FileSystem, Root), NullLogger<FileSystemRawMessageStore>.Instance);
         var router = new RawMessageStoreRouter(ctx, opts, new PostgresRawMessageStore(ctx, opts), fs);
         var hydrator = new StrippedContentHydrator(ctx, new OriginalMessageReader(router));
+        var dateHelper = new DateTimeHelper(Opt.Create(new TimeZoneOptions { DisplayTimeZoneId = "Europe/Berlin" }));
         var svc = new EmailCoreService(ctx, NullLogger<EmailCoreService>.Instance,
-            new DateTimeHelper(Opt.Create(new TimeZoneOptions { DisplayTimeZoneId = "Europe/Berlin" })),
+            dateHelper,
             Opt.Create(new BatchOperationOptions()), Opt.Create(new DashboardOptions { CacheSeconds = 0 }),
             memoryCache: null, rawMessageOptions: opts, rawMessageStore: router, contentHydrator: hydrator,
             storageMode: Opt.Create(new StorageModeOptions { Mode = lean ? "Lean" : "Standard" }),
             leanIngest: new LeanIngest(fs, opts, NullLogger<LeanIngest>.Instance));
-        return new Wired(svc, new IntegrityService(ctx, router), router, hydrator, raw);
+        return new Wired(svc, new IntegrityService(ctx, router, dateHelper), router, hydrator, raw);
     }
 
     public static async Task<MailAccount> SeedAccountAsync(MailArchiverDbContext ctx)

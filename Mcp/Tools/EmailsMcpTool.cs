@@ -293,7 +293,9 @@ public class EmailsMcpTool : McpToolBase
             source = report.Source,
             storage = report.StorageType,
             lean = report.Lean,
-            findings = report.Findings
+            findings = report.Findings,
+                chainState = report.ChainState,
+                notCompared = report.NotCompared
         };
     }
 

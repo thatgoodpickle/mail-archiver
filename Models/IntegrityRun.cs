@@ -26,6 +26,12 @@ namespace MailArchiver.Models
         public int NotStored { get; set; }
         public int Inconsistent { get; set; }
 
+        /// <summary>Emails whose original hash differs from the one the audit chain recorded when it was stored.</summary>
+        public int ChainMismatch { get; set; }
+
+        /// <summary>Emails with an original but no audit chain entry (stored before the chain existed): informational.</summary>
+        public int Unchained { get; set; }
+
         /// <summary>Emails whose verification itself failed unexpectedly.</summary>
         public int Errors { get; set; }
 
@@ -78,11 +84,19 @@ namespace MailArchiver.Models
         public int ManifestIntervalHours { get; set; } = 0;
 
         /// <summary>
-        /// The signing key (PEM, ECDSA P-256). Empty = <c>signing-key.pem</c> inside <see cref="ManifestPath"/>,
-        /// created on first use. A key on the same disk as the archive only protects against mistakes and
-        /// non-root changes; keep the public key and the chain head somewhere root on this machine cannot reach.
+        /// The signing key (PEM, ECDSA P-256). Empty = <c>manifest-signing-key.pem</c> in the DataProtection key
+        /// directory (<c>DataProtection:KeyPath</c>, a different volume than the manifests in the shipped compose
+        /// file), created on first use with mode 0600. A key on the same host as the archive protects against
+        /// mistakes and against anyone without file access or the app's credentials; copy the public key and the
+        /// chain head somewhere this host cannot reach if more is needed.
         /// </summary>
         public string ManifestKeyPath { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Allow a NEW signing key to be created although signed manifests already exist. Off by default: a silently
+        /// regenerated key would make a rewritten manifest set verify. Set it once, deliberately, after losing the key.
+        /// </summary>
+        public bool AllowNewKey { get; set; } = false;
     }
 
     /// <summary>

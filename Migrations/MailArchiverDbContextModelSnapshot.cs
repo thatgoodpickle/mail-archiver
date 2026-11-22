@@ -819,6 +819,9 @@ namespace MailArchiver.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<int>("ChainMismatch")
+                        .HasColumnType("integer");
+
                     b.Property<int>("Checked")
                         .HasColumnType("integer");
 
@@ -854,6 +857,9 @@ namespace MailArchiver.Migrations
                         .HasColumnType("text");
 
                     b.Property<int>("Total")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Unchained")
                         .HasColumnType("integer");
 
                     b.Property<int>("Valid")
