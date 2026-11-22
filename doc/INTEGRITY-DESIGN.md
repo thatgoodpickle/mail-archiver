@@ -316,6 +316,34 @@ logged fallback to the CPU; (3) host work to pass the card through, outside this
 the same sample sets (`tools/make-ocr-samples.py`, `tools/score-ocr.py`) so the claim "faster" is a number; (5) putting `gpu` back
 in the settings dropdown only once (1) to (4) are done.
 
+### Second review fixes and Gmail (2026-11-22): what was built
+
+Second review (REVIEW-opus2-2026-11-22.md); REVIEW-fixes-status-2.md has one row per finding.
+
+- **Trash as a garbage collector (N-01, N-03, N-06, N-07, N-08, N-12, N-15, N-16, N-17):** see "The Trash is a garbage collector that needs proof".
+- **Quarantine (N-02).** `SyncProblemMessages` counts failures per message (account, folder, UIDVALIDITY, UID). After
+  `Sync:Quarantine:QuarantineAfterFailures` (3) failures in a row the message is quarantined: the folder checkpoint and the account's LastSync may
+  move past it, it is not fetched again on its own, it is listed on the Integrity & Storage page (and `GET /api/v1/integrity/sync-problems`) with
+  its reason, and an account with quarantined messages is logged as NOT completely archived. "Try again" (page, or
+  `POST /api/v1/integrity/sync-problems/retry`) puts it back; a message that archives after all leaves the list. Done for the IMAP sync;
+  the Graph sync and the importers keep their previous behaviour (no per-message checkpoint exists there).
+- **Cheaper syncing and variants (N-11).** Before a body is downloaded the sync fetches envelope and size for the batch and skips messages already
+  archived (same Message-ID and size, same folder; any folder for Gmail). A message that reuses a Message-ID but is a different original is archived
+  as a second email (the Message-ID is not unique in the archive), not dropped. Gmail copies seen in another folder no longer flip the folder.
+- **What "Valid" covers now (N-04, N-05, N-09, N-13).** Calendar-typed attachment rows are compared (a synthesized `.ics` is accepted only when it can be
+  re-derived from the original, once); an email archived after the chain began without a chain entry is `ChainMismatch` (state `Gap`), not
+  Valid (emails from before the chain stay *Unchained*); a changed display time zone shifts every stored date by a whole offset, which is noted
+  and not a finding (any other date difference is); a body on an email whose original has no text is a finding.
+- **Settings and keys (N-10, N-14, N-18, N-19).** A reset goes to the configured value (appsettings/environment without the database
+  overlay) and asks for the password when that lowers a protection; an old signing key beside the manifests is moved once to the key directory (0600,
+  chained `key.relocated`); a GET never writes an audit record; wrong passwords are counted per account and per address (twice the budget)
+  and chained (`setting.password-failed`); the counters are in memory and reset at a restart.
+- **Gmail (steps 4 and 5).** Per account: "Gmail search filter" (default `-label:Marketing`, empty = none), tested against the mailbox with
+  counts before saving; "sync only the folder with all mail" (default for Gmail; the sync fails loudly if Gmail hides that folder); labels,
+  Gmail message id and thread id captured with every message and refreshed; the Sent label sets the direction; label chips and a "Tagged
+  Marketing" view on the email list; the label filter on the list, the API (`label=`) and MCP, and the bulk "delete all matches" job use the same
+  filter clause. Labels are metadata, not the original; see "What every email means for a Gmail account".
+
 ### Review fixes (2026-11-22): the audit claim, exactly, and what changed
 
 An independent review (REVIEW-opus-2026-11-22.md, 27 findings) found that the checks said more than they
@@ -334,6 +362,17 @@ take display names, dates, HTML and the attachment list from the Graph API; very
 truncated). Originals are byte-exact as held by the mail server at capture time, except those labelled source
 `serialized` (mbox import, IMAP recovery fetch), which are intact but re-written by the parser. Email
 deletions and every access-log row are recorded in the chain, and a manifest lists every original.
+
+**What "every email" means for a Gmail account (step 4 and 5).** The claim covers every email that was ARCHIVED. For a Gmail
+account that is everything in the folder with all mail EXCEPT mail matching the account's Gmail search filter at the time of each sync
+(default `-label:Marketing`: mail tagged Marketing or any sub-label, as Gmail's search understands it). Excluded mail is never
+downloaded, listed or hashed, and there is no list of what was skipped; Gmail's own label is the record. The filter is saved with the account,
+shown on the Integrity & Storage page, and every change is written to the chain (`account.filter.changed`: old, new, who). Mail
+tagged Marketing AFTER it was archived stays archived and shows as "tagged Marketing" until an administrator deletes it. The Gmail labels, message
+id and thread id stored on an email are Gmail's metadata ABOUT it, captured at the last sync: they are NOT part of the stored original, NOT
+covered by its hash, and are refreshed from Gmail (at most once a day, and with every sync for mail in the sync window); label changes are
+chained only when `Integrity__ChainLabelChanges=true`. How Gmail's category labels (Promotions, Social, Updates) appear in the label list over IMAP has not
+been verified on a real account.
 
 **What this does and does not protect against.** It protects against mistakes, software faults, and changes by
 anyone who does NOT hold the application's database credentials, host file access or code execution inside the

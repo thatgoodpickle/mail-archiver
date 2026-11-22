@@ -325,6 +325,15 @@ signed records (manifests), shows and restores the Trash for deleted emails' ori
   saved or none. When a pending change lowers a protection (shortening the Trash time, switching the Trash or a schedule off, changing the OCR
   mode), pressing Save opens a dialog that lists exactly what will change and asks for your password; otherwise Save applies straight away. An
   account that signs in with single sign-on cannot confirm such changes and must use the environment variable on the host.
+- **Trash safety (second review).** `RawMessages__OriginalCleanup__BreakerPercent` (5) and `__BreakerMinFiles` (50): a run that would move more than that share
+  of all originals (and at least that many) at once is refused until an administrator runs it anyway. The Trash only moves an original whose email was
+  deleted on purpose (a delete request is in the history log) and only while the database and the originals folder carry the same archive identity
+  (marker file `.archive-id` in the originals folder); after an upgrade, or after you moved or restored the folder, confirm with "This is the right
+  archive" on the page. Originals with no delete request are only listed.
+- **Problem messages.** `Sync__Quarantine__QuarantineAfterFailures` (3): failures in a row before a message is set aside (listed on the page, retried by
+  an administrator).
+- **Gmail.** `Integrity__ChainLabelChanges` (false): also chain every change of a message's Gmail labels. Per account (Edit page): "Gmail search filter",
+  "Gmail: sync only the folder with all mail".
 - **Not available yet: reading with a graphics card (GPU).** The OCR mode offers only Off and On (processor). A GPU build was left out on purpose because the processor is fast enough for a background job and a GPU needs separate images per vendor plus passing the card through to the archive VM. The reasons, and what building it would take, are under "Development: GPU OCR" in `doc/INTEGRITY-DESIGN.md`.
 - **An environment variable pins a setting.** If, for example, `RawMessages__OriginalCleanup__BinRetentionDays` is set, the page shows it
   as locked and ignores any stored value. Remove the variable to edit it on the page again. Values in `appsettings.json` do not pin.

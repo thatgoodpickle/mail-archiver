@@ -12,6 +12,20 @@ Gmail accounts can be integrated with the Mail Archiver application using IMAP w
 2. Generate an App Password specifically for the Mail Archiver application
 3. Use the App Password instead of your regular Gmail password when configuring the account in Mail Archiver
 
+## 🍴 This fork syncs the folder with all mail (and why that differs from the advice below)
+
+The advice below (hide "All Mail" from IMAP and sync the label folders) suits the upstream app, which stores a message once and then
+moves its folder around as the same message turns up under other labels. This fork instead syncs **only the folder that holds all mail** and
+records each message's Gmail labels with it: every message is stored once, downloaded once, with its exact original, and the labels
+(Inbox, Sent, Starred, your own labels, sub-labels) are shown, filterable and refreshed. For that, **"All Mail" must be visible to IMAP**
+(Gmail Settings, Labels, All Mail: Show in IMAP); the account refuses to sync, with a clear error, when it is not. The option
+"Gmail: sync only the folder with all mail" can be switched off per account to get the upstream behaviour back.
+
+**Marketing mail.** A per-account "Gmail search filter" (default `-label:Marketing`) keeps tagged mail out of the archive: you create the
+label and its filters in Gmail, and tagged mail, including sub-labels, is never downloaded. Check what the label holds before the first sync (booking
+confirmations, invoices and receipts often carry an unsubscribe link). Use "Test the filter" on the account's Edit page to see how many messages
+it skips.
+
 ## 🏷️ Gmail Label Settings
 
 It is strongly recommended to adjust your Gmail label settings to prevent the "All Mail" label from being exposed via IMAP:
