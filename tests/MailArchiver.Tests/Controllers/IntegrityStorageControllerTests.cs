@@ -9,6 +9,7 @@ using MailArchiver.Services;
 using MailArchiver.Services.Shared;
 using MailArchiver.Tests.Infrastructure;
 using MailArchiver.Tests.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
@@ -203,7 +204,7 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
         Assert.Equal(true, k.Controller.TempData["SettingsOk"]);
         Assert.Equal("44", (await k.Db.AppSettings.AsNoTracking().SingleAsync(s => s.Key == "Ocr:MaxPages")).Value);
         Assert.Equal("admin", (await k.Db.AppSettings.AsNoTracking().SingleAsync(s => s.Key == "Ocr:MaxPages")).UpdatedBy);
-        Assert.Single(k.Settings.Chain.Entries.Where(e => e.Kind == "setting.changed"));
+        Assert.Single(k.Settings.Chain.Entries, e => e.Kind == "setting.changed");
     }
 
     [Fact]
