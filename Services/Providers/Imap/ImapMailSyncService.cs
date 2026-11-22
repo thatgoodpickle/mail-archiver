@@ -31,6 +31,7 @@ namespace MailArchiver.Services.Providers.Imap
         private readonly BatchOperationOptions _batchOptions;
         private readonly MailSyncOptions _mailSyncOptions;
         private readonly BandwidthTrackingOptions _bandwidthOptions;
+        private readonly MailArchiver.Services.Shared.ISyncProblemService? _problems;
 
         public ImapMailSyncService(
             MailArchiverDbContext context,
@@ -44,8 +45,10 @@ namespace MailArchiver.Services.Providers.Imap
             DateTimeHelper dateTimeHelper,
             IOptions<BatchOperationOptions> batchOptions,
             IOptions<MailSyncOptions> mailSyncOptions,
-            IOptions<BandwidthTrackingOptions> bandwidthOptions)
+            IOptions<BandwidthTrackingOptions> bandwidthOptions,
+            MailArchiver.Services.Shared.ISyncProblemService? problems = null)
         {
+            _problems = problems;
             _context = context;
             _logger = logger;
             _coreService = coreService;
@@ -109,6 +112,7 @@ namespace MailArchiver.Services.Providers.Imap
             var processedEmails = 0;
             var newEmails = 0;
             var failedEmails = 0;
+            var quarantinedEmails = 0;
             var failedFolders = 0;
             var missingFolders = 0;
             var recoveredEmails = 0;
@@ -181,6 +185,7 @@ namespace MailArchiver.Services.Providers.Imap
                         processedEmails += folderResult.ProcessedEmails;
                         newEmails += folderResult.NewEmails;
                         failedEmails += folderResult.FailedEmails;
+                        quarantinedEmails += folderResult.QuarantinedEmails;
                         failedFolders += folderResult.FailedFolders;
                         missingFolders += folderResult.MissingFolders;
                         recoveredEmails += folderResult.RecoveredEmails;
@@ -340,6 +345,9 @@ namespace MailArchiver.Services.Providers.Imap
                     "Failed folders: {FailedFolders}, Missing folders: {MissingFolders}",
                     account.Name, newEmails, failedEmails, deletedEmails, recoveredEmails, providerPlaceholderEmails,
                     failedFolders, missingFolders);
+                if (quarantinedEmails > 0)
+                    _logger.LogWarning("Account {AccountName} is NOT completely archived: {Count} messages are quarantined (they failed repeatedly). They are listed on the Integrity & Storage page, where an administrator can retry them.",
+                        account.Name, quarantinedEmails);
 
                 if (jobId != null)
                 {
@@ -689,6 +697,44 @@ namespace MailArchiver.Services.Providers.Imap
             }
         }
 
+        /// <summary>
+        /// Second review N-11: before any body is downloaded, fetches envelope and size for the batch and returns the UIDs of
+        /// messages we already hold: same Message-ID, same size as the stored original, and (outside Gmail) the same folder.
+        /// Those are not downloaded again. Anything doubtful is simply downloaded as before, so a failure here only costs time.
+        /// A different message that reuses a Message-ID has a different size and is therefore still fetched.
+        /// </summary>
+        private async Task<Dictionary<uint, (DateTime Date, string? MessageId)>> PreSkipKnownAsync(IMailFolder folder, MailAccount account, IList<UniqueId> batch, CancellationToken cancellationToken)
+        {
+            var skip = new Dictionary<uint, (DateTime, string?)>();
+            if (!_coreService.StoresRawMessages || batch.Count == 0) return skip;
+            try
+            {
+                var summaries = await folder.FetchAsync(batch, MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.Size, cancellationToken);
+                var withIds = summaries.Where(s => !string.IsNullOrEmpty(s.Envelope?.MessageId) && s.Size.HasValue).ToList();
+                if (withIds.Count == 0) return skip;
+                var ids = withIds.Select(s => s.Envelope!.MessageId).Distinct().ToList();
+                var known = await _context.ArchivedEmails.AsNoTracking()
+                    .Where(e => e.MailAccountId == account.Id && ids.Contains(e.MessageId))
+                    .Select(e => new { e.MessageId, e.FolderName, Size = e.RawMessage != null ? (long?)e.RawMessage.Size : null })
+                    .ToListAsync(cancellationToken);
+                if (known.Count == 0) return skip;
+                var gmail = MailArchiver.Services.Shared.GmailAccount.Is(account);
+                var folderName = MailContentHelper.CleanText(folder.FullName ?? string.Empty);
+                foreach (var s in withIds)
+                {
+                    var hit = known.Any(k => k.MessageId == s.Envelope!.MessageId && k.Size == s.Size!.Value && (gmail || k.FolderName == folderName));
+                    if (hit) skip[s.UniqueId.Id] = ((s.Envelope!.Date ?? s.InternalDate ?? DateTimeOffset.UtcNow).DateTime, s.Envelope!.MessageId);
+                }
+                if (skip.Count > 0)
+                    _logger.LogDebug("Pre-check in folder {FolderName}: {Skipped} of {Total} messages are already archived and are not downloaded again", folder.FullName, skip.Count, batch.Count);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogDebug(ex, "Pre-check of folder {FolderName} failed; the messages are downloaded as usual", folder.FullName);
+            }
+            return skip;
+        }
+
         private async Task<SyncFolderResult> SyncFolderAsync(IMailFolder folder, MailAccount account, ImapClient client, string? jobId = null, CancellationToken cancellationToken = default)
         {
             var result = new SyncFolderResult();
@@ -866,6 +912,29 @@ namespace MailArchiver.Services.Providers.Imap
                             folder.FullName, account.Name, beforeResume - uids.Count, beforeResume);
                     }
 
+                    // Second review N-02: quarantined messages are not fetched again on their own; messages that failed
+                    // before (but are not quarantined yet, or were retried by an administrator) are tried again even when
+                    // the search window has moved past them.
+                    IReadOnlyDictionary<long, SyncProblemMessage> problems = new Dictionary<long, SyncProblemMessage>();
+                    if (_problems != null)
+                    {
+                        try { problems = await _problems.LoadAsync(account.Id, folder.FullName, folder.UidValidity, cancellationToken); }
+                        catch (Exception pex) when (pex is not OperationCanceledException) { _logger.LogWarning(pex, "Could not read the problem messages of folder {FolderName}", folder.FullName); }
+                    }
+                    if (problems.Count > 0)
+                    {
+                        var quarantinedUids = problems.Values.Where(p => p.Status == SyncProblemMessage.Quarantined).Select(p => p.Uid).ToHashSet();
+                        var present = new HashSet<long>(uids.Select(u => (long)u.Id));
+                        var merged = uids.Where(u => !quarantinedUids.Contains(u.Id)).ToList();
+                        foreach (var p in problems.Values.Where(p => p.Status == SyncProblemMessage.Failing && !present.Contains(p.Uid)))
+                            merged.Add(new UniqueId((uint)p.Uid));
+                        uids = merged.OrderBy(u => u.Id).ToList();
+                        result.QuarantinedEmails += quarantinedUids.Count;
+                        if (quarantinedUids.Count > 0)
+                            _logger.LogWarning("Folder {FolderName} of account {AccountName}: {Count} quarantined messages are not fetched again until an administrator retries them",
+                                folder.FullName, account.Name, quarantinedUids.Count);
+                    }
+
                     _logger.LogInformation("Found {Count} messages to process in folder {FolderName} for account: {AccountName}",
                         uids.Count, folder.FullName, account.Name);
 
@@ -886,6 +955,10 @@ namespace MailArchiver.Services.Providers.Imap
                         _logger.LogInformation("Processing batch of {Count} messages (starting at {Start}) in folder {FolderName} via IMAP",
                             batch.Count, i, folder.FullName);
 
+                        // Second review N-11: ask the server for envelope and size first. A message whose Message-ID and size match
+                        // an email we already hold (in this folder, or anywhere for Gmail) is not downloaded again.
+                        var preSkip = await PreSkipKnownAsync(folder, account, batch, cancellationToken);
+
                         foreach (var uid in batch)
                         {
                             var messageStopReason = SyncInterruption.Evaluate(
@@ -901,6 +974,24 @@ namespace MailArchiver.Services.Providers.Imap
 
                             try
                             {
+                                if (preSkip.TryGetValue(uid.Id, out var knownMessage))
+                                {
+                                    result.ProcessedEmails++;
+                                    if (problems.ContainsKey(uid.Id) && _problems != null)
+                                    {
+                                        try { await _problems.ResolveAsync(account.Id, folder.FullName, folder.UidValidity, uid.Id, cancellationToken); } catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+                                    }
+                                    if (!watermarkFrozen)
+                                    {
+                                        try
+                                        {
+                                            await _bandwidthService.UpdateCheckpointAsync(account.Id, folder.FullName, knownMessage.Date, knownMessage.MessageId ?? string.Empty, 0, uid.Id, folder.UidValidity);
+                                        }
+                                        catch (Exception cpEx) { _logger.LogWarning(cpEx, "Error updating checkpoint"); }
+                                    }
+                                    continue;
+                                }
+
                                 if (circuitBreaker.SkipNextReconnectGate && !client.IsConnected)
                                 {
                                     // The gate was set by a previous failure, but the session is actually
@@ -1234,6 +1325,11 @@ namespace MailArchiver.Services.Providers.Imap
 
                                 result.ProcessedEmails++;
 
+                                if (problems.ContainsKey(uid.Id) && _problems != null)
+                                {
+                                    try { await _problems.ResolveAsync(account.Id, folder.FullName, folder.UidValidity, uid.Id, cancellationToken); } catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+                                }
+
                                 if (wasRecovered)
                                 {
                                     // Counted next to ProcessedEmails, not at the moment of the fetch, so a
@@ -1320,14 +1416,38 @@ namespace MailArchiver.Services.Providers.Imap
                                     "IsUTF8Error: {IsUtf8Error}, InnermostError: {InnermostError}",
                                     folder.FullName, emailSubject, emailFrom, emailDate, emailMessageId, uid, isUtf8Error, innermostEx.Message);
 
-                                result.FailedEmails++;
+                                // Second review N-02: count the failure per message. After a few failures in a row the message is
+                                // quarantined: the sync moves on (watermark and LastSync may advance past it) and it is listed with
+                                // its reason until an administrator retries it. Before that, behaviour is as before.
+                                var quarantinedNow = false;
+                                if (_problems != null)
+                                {
+                                    try
+                                    {
+                                        var failure = await _problems.RecordFailureAsync(account.Id, folder.FullName, folder.UidValidity, uid.Id, emailMessageId, innermostEx.Message, cancellationToken);
+                                        quarantinedNow = failure.Quarantined;
+                                        if (quarantinedNow)
+                                            _logger.LogError("Message UID {Uid} in folder {FolderName} of account {AccountName} failed {Count} times in a row and is QUARANTINED: the sync moves on, and it is listed on the Integrity & Storage page",
+                                                uid.Id, folder.FullName, account.Name, failure.FailCount);
+                                    }
+                                    catch (Exception pex) when (pex is not OperationCanceledException) { _logger.LogWarning(pex, "Could not record the failure of UID {Uid}", uid.Id); }
+                                }
+
                                 RecordIssue(jobId, SyncIssueKind.MessageFailed, folder.FullName, ex,
                                     uid.Id, emailSubject);
 
-                                // From here on this folder's watermark stays where it is. Anything
-                                // above this UID is read again on the next run, which is the price
-                                // of never skipping the message that just failed.
-                                watermarkFrozen = true;
+                                if (quarantinedNow)
+                                {
+                                    result.QuarantinedEmails++;
+                                }
+                                else
+                                {
+                                    result.FailedEmails++;
+                                    // From here on this folder's watermark stays where it is. Anything
+                                    // above this UID is read again on the next run, which is the price
+                                    // of never skipping the message that just failed.
+                                    watermarkFrozen = true;
+                                }
                             }
                         }
 
@@ -1670,6 +1790,12 @@ namespace MailArchiver.Services.Providers.Imap
             public int ProcessedEmails { get; set; }
             public int NewEmails { get; set; }
             public int FailedEmails { get; set; }
+
+            /// <summary>
+            /// Messages set aside after failing again and again (second review N-02): the sync moves past them, they are listed
+            /// on the Integrity &amp; Storage page, and the account is never reported as completely archived while any exist.
+            /// </summary>
+            public int QuarantinedEmails { get; set; }
 
             /// <summary>
             /// Messages the normal fetch reported as missing and the IMAP fallback retrieved

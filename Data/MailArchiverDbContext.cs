@@ -22,6 +22,7 @@ namespace MailArchiver.Data
         public DbSet<AuditChainEntry> AuditChain { get; set; }
         public DbSet<OriginalBinEntry> OriginalBinEntries { get; set; }
         public DbSet<ArchiveIdentity> ArchiveIdentities { get; set; }
+        public DbSet<SyncProblemMessage> SyncProblemMessages { get; set; }
         public DbSet<AppSetting> AppSettings { get; set; }
         public DbSet<OriginalCleanupRun> OriginalCleanupRuns { get; set; }
         public DbSet<AttachmentText> AttachmentTexts { get; set; }
@@ -252,6 +253,15 @@ namespace MailArchiver.Data
                 e.HasIndex(x => x.Sha256);
             });
             modelBuilder.Entity<OriginalCleanupRun>(e => e.ToTable("OriginalCleanupRuns", "mail_archiver"));
+            modelBuilder.Entity<SyncProblemMessage>(e =>
+            {
+                e.ToTable("SyncProblemMessages", "mail_archiver");
+                e.HasKey(x => x.Id);
+                e.HasIndex(x => new { x.MailAccountId, x.FolderName, x.UidValidity, x.Uid }).IsUnique();
+                e.Property(x => x.FirstSeen).HasColumnType("timestamp without time zone");
+                e.Property(x => x.LastSeen).HasColumnType("timestamp without time zone");
+                e.Property(x => x.QuarantinedAt).HasColumnType("timestamp without time zone");
+            });
             modelBuilder.Entity<ArchiveIdentity>(e => { e.ToTable("ArchiveIdentity", "mail_archiver"); e.HasKey(x => x.Id); e.Property(x => x.Id).ValueGeneratedNever(); e.Property(x => x.CreatedAt).HasColumnType("timestamp without time zone"); });
 
             // Fork: tamper-evident audit trail. The sequence number is assigned by the writer (under a

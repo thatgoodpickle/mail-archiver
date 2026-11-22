@@ -1036,6 +1036,58 @@ namespace MailArchiver.Migrations
                     b.ToTable("RawMessages", "mail_archiver");
                 });
 
+            modelBuilder.Entity("MailArchiver.Models.SyncProblemMessage", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("FailCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("FirstSeen")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("FolderName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("LastSeen")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<int>("MailAccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("MessageId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("QuarantinedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("Uid")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("UidValidity")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MailAccountId", "FolderName", "UidValidity", "Uid")
+                        .IsUnique();
+
+                    b.ToTable("SyncProblemMessages", "mail_archiver");
+                });
+
             modelBuilder.Entity("MailArchiver.Models.SyncCheckpoint", b =>
                 {
                     b.Property<int>("Id")

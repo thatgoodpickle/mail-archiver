@@ -1751,7 +1751,30 @@ namespace MailArchiver.Services.Core
                      (legacyMessageId != null && e.MessageId == legacyMessageId) ||
                      (importedMessageId != null && e.MessageId == importedMessageId)));
 
-            if (existingEmail != null)
+            // Second review N-11 (fork): a message that reuses the Message-ID of one we hold but is DIFFERENT (another original: a
+            // mailing-list copy with a footer, a resent message, a sender that reuses ids) is not a duplicate and must not be dropped
+            // silently. It is archived as a second email (the Message-ID is not unique in the archive), and the log says so. Only
+            // decided when we hold the original of the existing email(s) and have the new one to compare.
+            var isVariant = false;
+            if (existingEmail != null && rawMessage != null && rawMessage.Bytes.Length > 0)
+            {
+                var newSha = RawMessageCodec.ComputeSha256(rawMessage.Bytes);
+                var heldShas = await _context.ArchivedEmails.AsNoTracking()
+                    .Where(e => e.MailAccountId == account.Id &&
+                        (e.MessageId == messageId ||
+                         (legacyMessageId != null && e.MessageId == legacyMessageId) ||
+                         (importedMessageId != null && e.MessageId == importedMessageId)))
+                    .Select(e => e.RawMessage != null ? e.RawMessage.Sha256 : null)
+                    .ToListAsync();
+                if (heldShas.Any(h => h != null) && !heldShas.Contains(newSha))
+                {
+                    isVariant = true;
+                    _logger.LogWarning("Message-ID {MessageId} is already archived, but this message is a DIFFERENT original (hash {Sha}). It is archived as a second email, not dropped.",
+                        messageId, newSha[..12]);
+                }
+            }
+
+            if (existingEmail != null && !isVariant)
             {
                 var hasChanges = false;
 
@@ -1769,7 +1792,9 @@ namespace MailArchiver.Services.Core
 
                 // E-Mail existiert bereits, prüfen ob der Ordner geändert wurde
                 var cleanFolderName = MailContentHelper.CleanText(folderName ?? string.Empty);
-                if (existingEmail.FolderName != cleanFolderName)
+                // Fork (N-11): Gmail shows labels as folders, so the same message is seen in many of them; its folder must not flip to
+                // whichever was synced last (the labels are recorded as metadata instead).
+                if (existingEmail.FolderName != cleanFolderName && !GmailAccount.Is(account))
                 {
                     // Ordner hat sich geändert, aktualisieren
                     var oldFolder = existingEmail.FolderName;

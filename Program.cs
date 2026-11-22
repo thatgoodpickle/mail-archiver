@@ -546,6 +546,8 @@ builder.Services.AddHostedService<MailArchiver.Services.RawMessageOrphanCleanupS
 // Fork (review F-11): recycle bin for hash-named originals nothing refers to (on by default, idle unless originals are hash-named files).
 builder.Services.AddSingleton<MailArchiver.Services.Shared.IOriginalBin, MailArchiver.Services.Shared.OriginalBin>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.IArchiveIdentityService, MailArchiver.Services.Shared.ArchiveIdentityService>();
+builder.Services.Configure<MailArchiver.Models.SyncQuarantineOptions>(builder.Configuration.GetSection(MailArchiver.Models.SyncQuarantineOptions.Section));
+builder.Services.AddScoped<MailArchiver.Services.Shared.ISyncProblemService, MailArchiver.Services.Shared.SyncProblemService>();
 builder.Services.AddHostedService<MailArchiver.Services.Shared.OriginalBinService>();
 
 // EML import services (refactored from monolithic EmlImportService)
