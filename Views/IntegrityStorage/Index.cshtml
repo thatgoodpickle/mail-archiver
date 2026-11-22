@@ -82,9 +82,12 @@
     .ims h2.ims-h { font-size: 1.05rem; margin-bottom: .15rem; }
     .ims .ims-row.ims-edited { border-left: 3px solid var(--primary-color, #0d6efd); padding-left: .75rem; }
     .ims .ims-error { border-left: 3px solid var(--danger-color, #dc3545); padding: .25rem .6rem; margin-top: .4rem; }
-    .ims .ims-dirtybar { position: sticky; top: 0; z-index: 1030; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between;
-        background: var(--card-bg, #fff); border: 1px solid var(--border-color, #dee2e6); border-radius: .375rem; padding: .5rem .75rem; margin-bottom: .75rem; }
-    .ims .ims-dirtybar.d-none { display: none !important; }
+    /* The unsaved-changes status sits in the heading row; its space is always reserved, so nothing shifts when it appears. */
+    .ims .ims-headrow { position: sticky; top: 0; z-index: 1030; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between;
+        min-height: 2.75rem; padding: .25rem 0; background: var(--card-bg, transparent); }
+    .ims .ims-dirty { display: flex; gap: .5rem; align-items: center; }
+    .ims .ims-dirty.ims-quiet { visibility: hidden; }
+    .ims .ims-table th { font-weight: 600; font-size: .85rem; color: inherit; opacity: .8; }
 </style>
 
 <div class="container-fluid ims">
@@ -406,16 +409,15 @@
             <form id="settingsForm" method="post" asp-action="SaveSettings" data-local="@(Model.HasLocalPassword ? "true" : "false")"
                   data-reopen="@(Model.PasswordProblem != null ? "true" : "false")" data-reopen-message="@Model.PasswordProblem">
                 <input type="hidden" name="password" id="savePassword" value="" disabled />
-                <div class="ims-dirtybar d-none" id="dirtyBar" role="status">
-                    <span><i class="bi bi-pencil" aria-hidden="true"></i> <strong id="dirtyCount">0 unsaved changes</strong></span>
-                    <span class="d-flex gap-2">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" id="btnDiscardTop">Discard changes</button>
-                        <button type="submit" class="btn btn-primary btn-sm">Save</button>
-                    </span>
-                </div>
-
                 <div class="ims-block">
-                    <h2 class="ims-h">You can change these here</h2>
+                    <div class="ims-headrow">
+                        <h2 class="ims-h mb-0">You can change these here</h2>
+                        <div class="ims-dirty ims-quiet" id="dirtyBar" role="status">
+                            <span class="small"><i class="bi bi-pencil" aria-hidden="true"></i> <strong id="dirtyCount">0 unsaved changes</strong></span>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="btnDiscardTop">Discard changes</button>
+                            <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                        </div>
+                    </div>
                     <p class="text-muted small">Some changes make the archive less protected. When you save one of those, you are asked for your password first.</p>
                     <div class="ims-group">
                     @foreach (var s in editable)
@@ -495,51 +497,50 @@
             @* ---------------------------------------------------------------- set by the server *@
             <div class="ims-block ims-panel">
                 <h2 class="ims-h">Set by the server</h2>
-                <p class="text-muted small">These could be changed here, but the server's own settings (the compose file or the environment) take priority and lock them.</p>
+                <p class="text-muted small">These could be changed here, but the server's own settings take priority.</p>
                 @if (pinned.Count == 0)
                 {
                     <p class="text-muted small mb-0">Nothing is set by the server at the moment.</p>
                 }
-                <div class="ims-group">
-                @foreach (var s in pinned)
+                else
                 {
-                    <div class="ims-row">
-                        <div class="row g-3">
-                            <div class="col-lg-6">
-                                <div class="fw-semibold">@s.Label</div>
-                                <div class="small text-muted">@s.Help</div>
-                            </div>
-                            <div class="col-lg-6">
-                                <div>Currently: <strong>@Plain(s.Key, s.Value)</strong> <span class="ims-badge">set by the server</span></div>
-                                <div class="small text-muted ims-note"><i class="bi bi-lock" aria-hidden="true"></i><span>
-                                    Set by <code>@s.EnvVar</code>@Compat(s.EnvVar). To change it here, remove that setting from the compose file or environment and restart the application.</span></div>
-                            </div>
-                        </div>
+                    <div class="table-responsive">
+                    <table class="table table-sm align-middle ims-table mb-2">
+                        <thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Technical name</th></tr></thead>
+                        <tbody>
+                        @foreach (var s in pinned)
+                        {
+                            <tr>
+                                <td><div class="fw-semibold">@s.Label</div><div class="small text-muted">@s.Help</div></td>
+                                <td><strong>@Plain(s.Key, s.Value)</strong></td>
+                                <td><code>@s.EnvVar</code><span class="small text-muted">@Compat(s.EnvVar)</span></td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
                     </div>
+                    <p class="small text-muted mb-0"><i class="bi bi-info-circle" aria-hidden="true"></i> To change one here, remove it from the compose file or environment and restart the application.</p>
                 }
-                </div>
             </div>
 
             @* ---------------------------------------------------------------- locked *@
             <div class="ims-block">
                 <h2 class="ims-h">Locked for safety</h2>
-                <p class="text-muted small">These decide how the archive keeps its originals and its history. They cannot be changed here, only on the server.</p>
-                <div class="ims-group">
-                @foreach (var s in locked)
-                {
-                    <div class="ims-row">
-                        <div class="row g-3">
-                            <div class="col-lg-6">
-                                <div class="fw-semibold">@s.Label</div>
-                                <div class="small text-muted">@s.Help</div>
-                            </div>
-                            <div class="col-lg-6">
-                                <div>Currently: <code>@Plain(s.Key, s.Value)</code></div>
-                                <div class="small text-muted ims-note"><i class="bi bi-lock" aria-hidden="true"></i><span>Set on the server with <code>@s.EnvVar</code>@(s.Pinned ? " (it is set)" : "").</span></div>
-                            </div>
-                        </div>
-                    </div>
-                }
+                <p class="text-muted small">These decide how the archive keeps its originals and its history. They cannot be changed here.</p>
+                <div class="table-responsive">
+                <table class="table table-sm align-middle ims-table mb-0">
+                    <thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Technical name</th></tr></thead>
+                    <tbody>
+                    @foreach (var s in locked)
+                    {
+                        <tr>
+                            <td><div class="fw-semibold">@s.Label</div><div class="small text-muted">@s.Help</div></td>
+                            <td><code>@Plain(s.Key, s.Value)</code></td>
+                            <td><code>@s.EnvVar</code></td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
                 </div>
             </div>
         </div>
@@ -728,7 +729,7 @@
         function refresh() {
             var n = changed().length;
             barCount.textContent = n + ' unsaved ' + plural(n, 'change', 'changes');
-            bar.classList.toggle('d-none', n === 0);
+            bar.classList.toggle('ims-quiet', n === 0);
             rows.forEach(function (r) { r.classList.toggle('ims-edited', state(r).changed); });
             if (n > 0) nothing.textContent = '';
         }
