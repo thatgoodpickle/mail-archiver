@@ -233,8 +233,10 @@
                 <div class="alert alert-danger" role="alert">This part could not be loaded: @binError</div>
             }
             <p class="text-muted small">
-                When an email is deleted and no other email shares its original, the original file goes into the Trash first. It can be restored until the
-                time is up. After that it is erased for good, and only a backup can bring it back.
+                When an email is deleted on purpose and no other email shares its original, the original file goes into the Trash first. It can be restored
+                until the time is up. After that the <strong>file</strong> is erased for good, and only a backup can bring it back. Not covered by this:
+                subjects and senders in the access log, and your backups. The text taken out of attachments is removed once no email has that attachment any more.
+                An original is only moved when the history log holds a delete request for it, so files without one are left alone and just listed.
             </p>
             @if (Model.BinStatus != null)
             {
@@ -261,6 +263,31 @@
                     So far: @b.TotalBinned moved to the Trash, @b.TotalRestored restored, @b.TotalPurged erased for good.
                     @if (b.LastRun != null) { <span>Last run: @b.LastRun.Status, @Utc(b.LastRun.StartedAt).</span> }
                 </p>
+            }
+            @if (Model.BinStatus?.Identity != null && !Model.BinStatus.Identity.Ok)
+            {
+                <div class="ims-result bad mb-2">
+                    <div><strong>✕ The Trash is paused.</strong> @Model.BinStatus.Identity.Message</div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="btnBinAdopt">This is the right archive</button>
+                </div>
+            }
+            @if (Model.BinStatus?.LastRun?.Alarm != null && (Model.BinStatus.Identity == null || Model.BinStatus.Identity.Ok))
+            {
+                <div class="ims-result bad mb-2">
+                    <div><strong>✕ The last run did nothing.</strong> @Model.BinStatus.LastRun.Alarm</div>
+                    @if (Model.BinStatus.LastRun.Alarm.Contains("safety limit"))
+                    {
+                        <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="btnBinAnyway">Run anyway</button>
+                    }
+                </div>
+            }
+            @if (Model.BinStatus?.LastRun != null && Model.BinStatus.LastRun.Unclaimed > 0)
+            {
+                <p class="small mb-2">
+                    <strong>@Model.BinStatus.LastRun.Unclaimed</strong> @Plural(Model.BinStatus.LastRun.Unclaimed, "original has", "originals have") no email and no recorded delete request. They are left alone.
+                    <button type="button" class="btn btn-link btn-sm p-0 align-baseline" id="btnBinUnclaimed">Show them</button>
+                </p>
+                <div id="unclaimedBox" class="d-none"></div>
             }
             <div id="binMsg" class="small mb-2" role="status"></div>
             @if (Model.BinItems.Count > 0)
@@ -674,6 +701,45 @@
         if (!confirm('Empty the Trash now? Originals that no email refers to are moved into the Trash, and originals that have been in the Trash long enough are deleted for good.')) return;
         working(bm, 'Starting...');
         post('BinRun').then(function (r) { r.ok ? show(bm, 'The Trash run has started. Reload the page in a moment to see the result.', true) : show(bm, r.message, false); }).catch(fail(bm));
+    });
+    var adopt = document.getElementById('btnBinAdopt');
+    if (adopt) adopt.addEventListener('click', function () {
+        if (!confirm('Only do this if you are sure this database and this originals folder belong together (for example after an upgrade, or after you moved or restored the folder on purpose). Continue?')) return;
+        working(bm, 'Working...');
+        post('BinAdopt').then(function (r) { show(bm, r.message, r.ok); if (r.ok) setTimeout(function () { location.hash = '#bin'; location.reload(); }, 800); }).catch(fail(bm));
+    });
+    var anyway = document.getElementById('btnBinAnyway');
+    if (anyway) anyway.addEventListener('click', function () {
+        if (!confirm('Run the Trash again without the safety limit? Every original with a recorded delete request will be moved to the Trash (you can restore them until the time is up).')) return;
+        working(bm, 'Starting...');
+        post('BinRun', { anyway: 'true' }).then(function (r) { r.ok ? show(bm, 'The Trash run has started. Reload the page in a moment to see the result.', true) : show(bm, r.message, false); }).catch(fail(bm));
+    });
+    var unc = document.getElementById('btnBinUnclaimed');
+    if (unc) unc.addEventListener('click', function () {
+        var box = document.getElementById('unclaimedBox');
+        working(bm, 'Looking through the originals folder...');
+        post('BinUnclaimed').then(function (r) {
+            if (!r.ok) { show(bm, r.message, false); return; }
+            bm.textContent = '';
+            box.textContent = ''; box.classList.remove('d-none');
+            if (!r.items.length) { box.textContent = 'None found.'; return; }
+            var table = document.createElement('table'); table.className = 'table table-sm align-middle';
+            r.items.forEach(function (i) {
+                var tr = document.createElement('tr');
+                var c1 = document.createElement('td'); var code = document.createElement('code'); code.title = i.sha256; code.textContent = i.sha256.substring(0, 16) + '…'; c1.appendChild(code);
+                var c2 = document.createElement('td'); c2.textContent = i.modified;
+                var c3 = document.createElement('td'); c3.className = 'text-end'; c3.textContent = Math.max(1, Math.round(i.size / 1024)) + ' KB';
+                var c4 = document.createElement('td'); c4.className = 'text-end';
+                var btn = document.createElement('button'); btn.type = 'button'; btn.className = 'btn btn-outline-secondary btn-sm'; btn.textContent = 'Move to Trash';
+                btn.addEventListener('click', function () {
+                    if (!confirm('Move this original to the Trash? No delete request was recorded for it. You can restore it until the time is up.')) return;
+                    post('BinMoveUnclaimed', { sha256: i.sha256 }).then(function (m) { show(bm, m.message, m.ok); if (m.ok) tr.remove(); }).catch(fail(bm));
+                });
+                c4.appendChild(btn);
+                tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(c3); tr.appendChild(c4); table.appendChild(tr);
+            });
+            box.appendChild(table);
+        }).catch(fail(bm));
     });
     document.querySelectorAll('.btn-bin-restore').forEach(function (b) {
         b.addEventListener('click', function () {

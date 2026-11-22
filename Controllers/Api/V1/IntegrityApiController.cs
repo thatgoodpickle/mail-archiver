@@ -59,7 +59,8 @@ public class IntegrityApiController : ApiControllerBase
             binRetentionDays = s.BinRetentionDays, intervalHours = s.IntervalHours, maxFilesPerRun = s.MaxFilesPerRun,
             inBin = s.InBin, inBinBytes = s.InBinBytes, earliestPurgeAt = s.EarliestPurgeAt,
             totalBinned = s.TotalBinned, totalRestored = s.TotalRestored, totalPurged = s.TotalPurged,
-            lastRun = s.LastRun == null ? null : BinRunDto(s.LastRun)
+            lastRun = s.LastRun == null ? null : BinRunDto(s.LastRun),
+            identity = s.Identity == null ? null : new { ok = s.Identity.Ok, code = s.Identity.Code, message = s.Identity.Message }
         });
     }
 
@@ -67,18 +68,18 @@ public class IntegrityApiController : ApiControllerBase
     {
         id = r.Id, status = r.Status, startedAt = r.StartedAt, finishedAt = r.FinishedAt, startedBy = r.StartedBy,
         scanned = r.Scanned, referenced = r.Referenced, binned = r.Binned, restored = r.Restored, purged = r.Purged,
-        deferred = r.Deferred, errors = r.Errors, error = r.Error
+        deferred = r.Deferred, errors = r.Errors, error = r.Error, unclaimed = r.Unclaimed, alarm = r.Alarm
     };
 
     /// <summary>Runs one bin pass now in the background (202). Takes no path; works only on hash-named originals.</summary>
     [HttpPost("original-cleanup/run")]
-    public async Task<IActionResult> BinRun()
+    public async Task<IActionResult> BinRun([FromQuery] bool anyway = false)
     {
         if (_bin == null) return Problem(statusCode: 501, title: "The Trash is not available.");
         try
         {
-            var run = await _bin.StartAsync(_authService.GetCurrentUserDisplayName(HttpContext));
-            await LogAsync("Trash run started");
+            var run = await _bin.StartAsync(_authService.GetCurrentUserDisplayName(HttpContext), overrideBreaker: anyway);
+            await LogAsync(anyway ? "Trash run started with the safety limit overridden" : "Trash run started");
             return Accepted(BinRunDto(run));
         }
         catch (InvalidOperationException ex) { return Problem(statusCode: 409, title: ex.Message); }

@@ -36,14 +36,20 @@ namespace MailArchiver.Services.Shared
         private readonly RawMessagePathResolver _paths;
         private readonly ILogger<RawMessageStorageMigrator> _logger;
         private readonly StorageModeOptions _storageMode;
+        private readonly IAuditChain? _chain;
+        private readonly bool _chainOn;
 
         public RawMessageStorageMigrator(
             MailArchiverDbContext context,
             IOptions<RawMessageOptions> options,
             RawMessagePathResolver paths,
             ILogger<RawMessageStorageMigrator> logger,
-            IOptions<StorageModeOptions>? storageMode = null)
+            IOptions<StorageModeOptions>? storageMode = null,
+            IAuditChain? chain = null,
+            IOptions<IntegrityOptions>? integrity = null)
         {
+            _chain = chain;
+            _chainOn = integrity?.Value.AuditChainEnabled ?? false;
             _context = context;
             _options = options.Value;
             _paths = paths;
@@ -223,6 +229,17 @@ namespace MailArchiver.Services.Shared
 
                     if (File.Exists(path))
                     {
+                        // Second review N-17: a hash-named original deleted here is recorded first; no record, no delete.
+                        if (_chainOn && _chain != null && OriginalBin.TryParseLive(relative, out var sha))
+                        {
+                            var rec = await _chain.AppendAsync("original.migrated", null, sha,
+                                new { storagePath = relative, to = "postgres", reason = "moved into the database by the storage migration" }, cancellationToken);
+                            if (rec == null)
+                            {
+                                _logger.LogError("Could not record the migration of {Path} in the audit chain; the file was NOT deleted", path);
+                                continue;
+                            }
+                        }
                         File.Delete(path);
                     }
                 }

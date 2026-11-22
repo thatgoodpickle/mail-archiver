@@ -190,12 +190,12 @@ namespace MailArchiver.Controllers
         // ----------------------------------------------------------------------------------------- original bin
 
         [HttpPost, ValidateAntiForgeryToken]
-        public async Task<IActionResult> BinRun()
+        public async Task<IActionResult> BinRun(bool anyway = false)
         {
             try
             {
-                var run = await _bin.StartAsync(Who);
-                await LogAsync("Trash run started from the Integrity & Storage page");
+                var run = await _bin.StartAsync(Who, overrideBreaker: anyway);
+                await LogAsync(anyway ? "Trash run started from the Integrity & Storage page with the safety limit overridden" : "Trash run started from the Integrity & Storage page");
                 return Json(new { ok = true, status = run.Status, id = run.Id });
             }
             catch (Exception ex) { return Json(new { ok = false, message = Short(ex) }); }
@@ -207,6 +207,39 @@ namespace MailArchiver.Controllers
             var sha = (sha256 ?? string.Empty).Trim();
             var r = await _bin.RestoreAsync(sha, Who);
             await LogAsync($"restore from the Trash requested for {(sha.Length > 12 ? sha[..12] : sha)}: {(r.Restored ? "restored" : "not restored")}");
+            return Json(new { ok = r.Restored, message = r.Message });
+        }
+
+        /// <summary>The explicit admin step for an originals folder the Trash refuses (upgrade, restored or moved volume): this database owns it.</summary>
+        [HttpPost, ValidateAntiForgeryToken]
+        public async Task<IActionResult> BinAdopt()
+        {
+            try
+            {
+                var r = await _bin.AdoptAsync(Who);
+                return Json(new { ok = r.Ok, message = r.Ok ? "Done. This database is now the owner of the originals folder, and the Trash can run." : r.Message });
+            }
+            catch (Exception ex) { return Json(new { ok = false, message = Short(ex) }); }
+        }
+
+        /// <summary>Lists originals that no email refers to and that have no recorded delete request (scans the folder, so it is only done on request).</summary>
+        [HttpPost, ValidateAntiForgeryToken]
+        public async Task<IActionResult> BinUnclaimed()
+        {
+            try
+            {
+                var items = await _bin.ListUnclaimedAsync(100);
+                return Json(new { ok = true, items = items.Select(i => new { sha256 = i.Sha256, size = i.Size, modified = i.Modified.ToString("yyyy-MM-dd HH:mm") + " UTC" }) });
+            }
+            catch (Exception ex) { return Json(new { ok = false, message = Short(ex) }); }
+        }
+
+        [HttpPost, ValidateAntiForgeryToken]
+        public async Task<IActionResult> BinMoveUnclaimed(string? sha256)
+        {
+            var sha = (sha256 ?? string.Empty).Trim();
+            var r = await _bin.MoveToTrashAsync(sha, Who);
+            await LogAsync($"move to the Trash requested for an original without a delete request {(sha.Length > 12 ? sha[..12] : sha)}: {(r.Restored ? "moved" : "not moved")}");
             return Json(new { ok = r.Restored, message = r.Message });
         }
 

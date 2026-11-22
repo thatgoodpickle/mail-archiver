@@ -409,8 +409,10 @@ Safety rails: files written or reused within the last 24 hours are left alone (i
 that is about to commit its row is never raced); at most `MaxFilesPerRun` (default 1000) are moved and, separately, purged
 per run; only paths of the form `ab/cd/<64 hex>.eml.gz` whose directory names match the hash are touched (id-named
 files, anything malformed, symlinks, and anything resolving outside the originals folder are refused); one run at a time
-in a process; every action is written to the audit chain BEFORE it happens (`original.binned`, `original.restored`,
-`original.purged`, `original.purge-failed`; an action whose record cannot be written is not done), plus an access-log row
+in a process, shared with restores and manual moves (second review N-08); the audit-chain record AND the Trash entry are written BEFORE
+the file is moved (`original.binned`, `original.restored`, `original.purged`, `original.purge-failed`; an action whose record cannot be
+written is not done; a crash in between leaves an entry without a file or a file without an entry, and the next run's reconcile pass
+clears the first and adopts the second, N-03), plus an access-log row
 of type Integrity per run and per manual restore; it never runs while the storage settings do not describe hash-named
 filesystem originals. Ownership: the older orphan collector owns id-named files and ignores hash-named files and the
 Trash; this collector owns hash-named files and the Trash and ignores id-named files.
@@ -422,17 +424,34 @@ reports it and sets `ok` to false, and a per-email check says the original is in
 that is missing with no Trash entry and no chain record stays a plain `Missing`.
 
 Settings: `RawMessages__OriginalCleanup__Enabled` (true), `__BinRetentionDays` (30), `__IntervalHours` (1, so a deleted
-email's original reaches the Trash soon), `__MaxFilesPerRun` (1000), `__StartupDelayMinutes` (15). Admin API (all under
+email's original reaches the Trash soon), `__MaxFilesPerRun` (1000), `__StartupDelayMinutes` (15), `__BreakerPercent` (5), `__BreakerMinFiles` (50). Admin API (all under
 `/api/v1/integrity/original-cleanup/`): `GET status` (on/applicable, counts in the Trash and bytes, earliest purge date,
 totals, last run), `POST run` (one pass now, takes no path), `GET bin` (the Trash list: sha256, moved at, purge date, size; no paths),
 `POST restore`, `POST erasure-status/{emailId}` (read-only: for one already deleted email, whether its original is still
 shared by other emails, in the Trash until when, or gone).
 
-**The honest limit:** while an original is in the Trash it can be restored. After the retention period it is gone for good,
-except from a backup. Leaving the Trash on (the default) therefore means that deleted emails are really erased after 30
-days, and from then on the archive no longer proves what those emails contained. The audit chain keeps only their hashes.
-The grace period is counted from when the Trash moved the file, not from when the email was deleted (a deletion is
-noticed within `IntervalHours`).
+**The Trash is a garbage collector that needs proof (second review N-01, decided by the user).** A live hash-named original is moved only
+when ALL of these hold: (a) a delete request exists, an `email.deleted` entry in the chain carrying the file's hash (written by the
+database trigger when an email row is deleted); (b) no `RawMessages` row refers to the file, re-checked immediately before the move and
+again after it; (c) the database is the one these originals belong to: a random archive id is kept in the database (`ArchiveIdentity`)
+and in the marker file `<originals>/.archive-id`; they must match. A fresh archive (no rows, no files) gets both created; an existing
+archive without them (an upgrade, a restored or moved volume), a missing marker next to files, or two different ids make the Trash
+refuse every run and show a notice on the page until an administrator confirms with "This is the right archive" (audited as
+`archive.identity.adopted`); (d) a circuit breaker: a run refuses when the database has no stored originals and no history while the
+folder holds files, and when more than `BreakerPercent` (5) percent of the live originals, but at least `BreakerMinFiles` (50), would
+be moved at once; the admin can run it anyway after looking (a removed account with thousands of emails is legitimate). Originals that
+no email refers to but that have NO delete request are never moved by a run: they are counted, listed on the page ("Show them"), and
+an administrator can move one to the Trash explicitly (confirmed, audited). This is what stops an empty, wrong or older database from
+making every original look deleted.
+
+**What the Trash erases, exactly (N-07).** After the retention period the original FILE is deleted for good, unless another email has
+identical bytes. Not covered: subjects and senders kept in the access log, and backups and database write-ahead logs. The extracted
+attachment and OCR text (`AttachmentTexts`, keyed by the attachment's hash) is removed by the same job once no attachment has that hash
+any more (after a day, so one being ingested is never caught). Leaving the Trash on (the default) therefore means that the stored
+original of a deleted email is gone after the retention period, and from then on the archive no longer proves what that email
+contained. The audit chain keeps only its hash. The grace period is counted from when the Trash moved the file, not from when the email
+was deleted (a deletion is noticed within `IntervalHours`). Housekeeping in the same run: half-written `<hash>.eml.gz.<guid>.tmp` leftovers
+of crashed writes older than a day are deleted (N-15); the storage migration records `original.migrated` before it deletes a hash-named file (N-17).
 
 ### The Integrity & Storage page and its settings (2026-11-22, CI green, 1572 tests; wording, one Save and the Trash name added after the first look)
 
