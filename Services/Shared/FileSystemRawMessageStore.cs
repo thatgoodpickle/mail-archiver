@@ -78,9 +78,36 @@ namespace MailArchiver.Services.Shared
 
             // Write to a temporary name and move into place, so an interrupted import cannot
             // leave a half-written file where a complete one is expected.
-            var temp = absolute + ".tmp";
+            // F-22: a temp name of its own, so two ingests of identical bytes (two accounts) cannot share one half-written file.
+            var temp = $"{absolute}.{Guid.NewGuid():N}.tmp";
             await File.WriteAllBytesAsync(temp, compressed);
-            File.Move(temp, absolute, overwrite: true);
+            try
+            {
+                if (_options.FileSystem.HashNamed)
+                {
+                    try
+                    {
+                        File.Move(temp, absolute, overwrite: false);
+                    }
+                    catch (IOException) when (File.Exists(absolute))
+                    {
+                        // The same bytes were written meanwhile: keep that file after checking it, drop ours.
+                        File.Delete(temp);
+                        var existing = RawMessageCodec.Decompress(await File.ReadAllBytesAsync(absolute), row.Size);
+                        if (!string.Equals(RawMessageCodec.ComputeSha256(existing), row.Sha256, StringComparison.Ordinal))
+                            throw new IOException("An existing original does not match its own name; refusing to use it.");
+                    }
+                }
+                else
+                {
+                    File.Move(temp, absolute, overwrite: true);
+                }
+            }
+            catch
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { /* best effort */ }
+                throw;
+            }
         }
 
         /// <summary>

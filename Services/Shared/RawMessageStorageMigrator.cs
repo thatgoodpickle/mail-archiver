@@ -35,17 +35,20 @@ namespace MailArchiver.Services.Shared
         private readonly RawMessageOptions _options;
         private readonly RawMessagePathResolver _paths;
         private readonly ILogger<RawMessageStorageMigrator> _logger;
+        private readonly StorageModeOptions _storageMode;
 
         public RawMessageStorageMigrator(
             MailArchiverDbContext context,
             IOptions<RawMessageOptions> options,
             RawMessagePathResolver paths,
-            ILogger<RawMessageStorageMigrator> logger)
+            ILogger<RawMessageStorageMigrator> logger,
+            IOptions<StorageModeOptions>? storageMode = null)
         {
             _context = context;
             _options = options.Value;
             _paths = paths;
             _logger = logger;
+            _storageMode = storageMode?.Value ?? new StorageModeOptions();
         }
 
         /// <summary>
@@ -66,6 +69,18 @@ namespace MailArchiver.Services.Shared
                 return new RawMessageMigrationResult(0, 0, 0, Array.Empty<string>());
             }
 
+            // F-07: hash-named originals are shared by byte-identical emails and, in lean mode, are the ONLY copy
+            // of each email's content. Moving them into the database is refused unless explicitly allowed.
+            if (source == RawMessageStorage.FileSystem && target == RawMessageStorage.Postgres
+                && (_options.FileSystem.HashNamed || _storageMode.IsLean) && !_storageMode.AllowHashNamedMigration)
+            {
+                const string reason = "Migration from the filesystem to the database is refused while RawMessages:FileSystem:HashNamed " +
+                    "or Storage:Mode=Lean is set (hash-named originals are shared between emails and, in lean mode, are the only copy). " +
+                    "Set Storage:AllowHashNamedMigration=true to run it anyway.";
+                _logger.LogError(reason);
+                return new RawMessageMigrationResult(0, 0, 1, new[] { reason });
+            }
+
             var moved = 0;
             var failed = 0;
             var errors = new List<string>();
@@ -78,7 +93,7 @@ namespace MailArchiver.Services.Shared
 
             // Files to remove once the batch is committed. Deleting them earlier would destroy
             // the only copy if the save below fails.
-            var filesToDelete = new List<string>();
+            var filesToDelete = new List<(string Absolute, string Relative)>();
 
             foreach (var row in candidates)
             {
@@ -110,7 +125,7 @@ namespace MailArchiver.Services.Shared
                 await _context.SaveChangesAsync(cancellationToken);
 
                 // Only now is the database the authoritative copy of these messages.
-                DeleteFiles(filesToDelete);
+                await DeleteFilesAsync(filesToDelete, cancellationToken);
             }
 
             var skipped = candidates.Count - moved - failed;
@@ -163,12 +178,12 @@ namespace MailArchiver.Services.Shared
         }
 
         private async Task MoveToPostgresAsync(
-            RawMessage row, CancellationToken cancellationToken, List<string> filesToDelete)
+            RawMessage row, CancellationToken cancellationToken, List<(string Absolute, string Relative)> filesToDelete)
         {
-            var absolute = _paths.GetAbsolutePath(
-                string.IsNullOrEmpty(row.StoragePath)
-                    ? _paths.GetRelativePath(row.ArchivedEmailId)
-                    : row.StoragePath);
+            var relativePath = string.IsNullOrEmpty(row.StoragePath)
+                ? _paths.GetRelativePath(row.ArchivedEmailId)
+                : row.StoragePath;
+            var absolute = _paths.GetAbsolutePath(relativePath);
 
             if (!File.Exists(absolute))
             {
@@ -189,15 +204,23 @@ namespace MailArchiver.Services.Shared
             row.StorageType = RawMessageStorage.Postgres;
             row.StoragePath = null;
 
-            filesToDelete.Add(absolute);
+            filesToDelete.Add((absolute, relativePath));
         }
 
-        private void DeleteFiles(IEnumerable<string> paths)
+        private async Task DeleteFilesAsync(IEnumerable<(string Absolute, string Relative)> files, CancellationToken cancellationToken)
         {
-            foreach (var path in paths)
+            foreach (var (path, relative) in files)
             {
                 try
                 {
+                    // F-07: a hash-named file is shared by every row with the same bytes; it goes only when no
+                    // filesystem row (this batch is committed by now) still points at it.
+                    if (await _context.RawMessages.AnyAsync(
+                            r => r.StoragePath == relative && r.StorageType == RawMessageStorage.FileSystem, cancellationToken))
+                    {
+                        continue;
+                    }
+
                     if (File.Exists(path))
                     {
                         File.Delete(path);

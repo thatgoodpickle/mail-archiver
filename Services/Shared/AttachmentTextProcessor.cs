@@ -287,13 +287,14 @@ namespace MailArchiver.Services.Shared
         // Drops the results with this status and sends the emails that contain them back to the queue.
         private async Task<int> RescanStatusAsync(string status, CancellationToken ct)
         {
+            // F-25: the status is a parameter, not text in the SQL ({{0}} is the first parameter; EffectiveSha is a constant fragment).
             return await _db.Database.ExecuteSqlRawAsync($@"
-                WITH del AS (DELETE FROM mail_archiver.""AttachmentTexts"" WHERE ""Status"" = '{status}' RETURNING ""Sha256"")
+                WITH del AS (DELETE FROM mail_archiver.""AttachmentTexts"" WHERE ""Status"" = {{0}} RETURNING ""Sha256"")
                 UPDATE mail_archiver.""ArchivedEmails"" e SET ""AttachmentTextAt"" = NULL
                 WHERE e.""Id"" IN (
                     SELECT a.""ArchivedEmailId"" FROM mail_archiver.""EmailAttachments"" a
                     LEFT JOIN mail_archiver.""AttachmentContents"" c ON c.""Id"" = a.""AttachmentContentId""
-                    WHERE {EffectiveSha} IN (SELECT ""Sha256"" FROM del))", ct);
+                    WHERE {EffectiveSha} IN (SELECT ""Sha256"" FROM del))", new object[] { status }, ct);
         }
     }
 

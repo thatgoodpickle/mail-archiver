@@ -28,6 +28,14 @@ namespace MailArchiver.Models
         public bool AllowSerializedImports { get; set; } = false;
 
         /// <summary>
+        /// Review finding F-07: moving originals from the filesystem back into the database is refused while
+        /// hash-named files are in use or lean mode is on (lean emails exist only as their original, and
+        /// byte-identical originals share one file). Set this to true to run the migration anyway; shared files
+        /// are then still never deleted while another row refers to them. Default false.
+        /// </summary>
+        public bool AllowHashNamedMigration { get; set; } = false;
+
+        /// <summary>
         /// The message to show when an mbox import must not start, or null when it may. Used by the web
         /// form, the import job and the command-line import, so they all say the same thing.
         /// </summary>
