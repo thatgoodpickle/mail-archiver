@@ -160,6 +160,42 @@ verify also refuses; startup check that Required needs Enabled); Phase 2:
   A non-lean Required email whose original write fails AFTER the row is saved stays in the archive without
   its original (lean mode writes the original first, so it cannot happen there); verify-all reports it as NotStored.
 
+### OCR step A: attachment text for search (2026-11-22, CI green, 1388 tests)
+
+Built: the worker that reads the TEXT LAYER of attachments so a word that exists only inside an attachment
+is found by search. No OCR engine yet (step B).
+
+- **Settings** (`Ocr` section, env `Ocr__Mode` etc.): `Mode` off (default) | cpu | gpu. cpu and gpu both read the
+  text layer only for now and log that no OCR engine is installed; off does nothing at all. Also `BatchSize`,
+  `IdleDelaySeconds`, `StartupDelayMinutes`, `MaxAttachmentMb` (50), `MaxTextKb` (128), `TimeoutSeconds` (60).
+- **Queue:** keyed by the attachment SHA-256 (lean rows record it; full-storage rows use `AttachmentContents.Hash`),
+  so an attachment in many emails is read once. Resumable by construction: "attachments without a result" is the
+  queue, nothing is kept in memory. Lean rows are read through the hydrator (bytes cut from the original and
+  checked against the recorded hash). Results live in `AttachmentTexts` (status Done | NeedsOcr | Unsupported |
+  Failed, method textlayer|ocr, engine, version, time, error). Failed results are retried only after a rescan.
+- **Extractors:** PDF (PdfPig 0.1.11, Apache-2.0), Word/Excel/PowerPoint and OpenDocument (zip + XML, no macros,
+  DTD off, per-entry decompression cap, entry count cap), text/CSV/JSON/XML/ICS, HTML (tags, scripts, styles
+  dropped), attached messages (subject + text body). A PDF with under 20 characters of text and every image are
+  NeedsOcr (waiting for step B). Text is cleaned (no NUL/control characters, whitespace collapsed) and capped.
+- **Search:** `ArchivedEmails.AttachmentText` (+ `AttachmentTextAt`, set when all of an email's attachments are done,
+  also when they held no text) is added to both `to_tsvector` expressions and the phrase checks in
+  `EmailFilterSql` and to the EF fallbacks in `EmailCoreService.SearchEmailsEFAsync`. Field searches
+  (`subject:`, `body:`, `from:`, `to:`) are unchanged. The column is derived and rebuildable; nothing reads it
+  except search (not the integrity check, API DTOs, exports, the eml builder or restore).
+- **Two existing protections had to change** (migration `20261122120000_AddAttachmentText`): (1) the locked-email
+  trigger compares the whole row, so it now also ignores `AttachmentText` and `AttachmentTextAt` (otherwise a locked
+  email could never get its search text; its own content is still fully protected); (2) the full-text GIN index only
+  helps when the query repeats its expression exactly, so `idx_archivedemails_fulltext_search` is replaced by
+  `..._v2` on the longer expression (the build time grows with the archive; do it at a quiet moment on a large one).
+  A small partial index `IX_ArchivedEmails_AttachmentTextPending` keeps the queue lookup cheap.
+- **PostgreSQL's 1 MB vector limit:** the other fields are already capped upstream; the attachment text adds at most
+  `MaxTextKb` (128 KB), per attachment and per email.
+- **API (admin):** `GET /api/v1/attachment-text/status` (counts by status and method, attachments waiting, emails
+  awaiting their search text), `POST /api/v1/attachment-text/rescan?scope=failed|all`.
+- **Open:** the pending-attachment query anti-joins all attachments each round (fine for step A, an index on
+  `EmailAttachments.Sha256` would help on millions of rows); legacy inline attachments without a hash are skipped;
+  step B (engine, sample scans, CPU/GPU choice) is not started.
+
 ## Phase 1: make the original mandatory, prove it
 
 1. `RawMessages:Required` (default false, so upstream behaviour is unchanged): when true,
