@@ -35,6 +35,11 @@ namespace MailArchiver.Models.ViewModels
         
         [Display(Name = "Use SSL")]
         public bool UseSSL { get; set; } = true;
+
+        /// <summary>Fork: Gmail search applied to the sync (for example -label:Marketing). Blank = no filter; ignored for non-Gmail servers.</summary>
+        [System.ComponentModel.DataAnnotations.Display(Name = "Gmail search filter")]
+        [System.ComponentModel.DataAnnotations.StringLength(500)]
+        public string? GmailSearchFilter { get; set; }
         
         [Display(Name = "Account Enabled")]
         public bool IsEnabled { get; set; } = true;
