@@ -187,8 +187,13 @@ namespace MailArchiver.Services.Shared
 
             if (original == null)
             {
+                // F-11: an original that sits in the bin is a collector problem (a row refers to a binned file), not silence.
+                var binned = await _context.OriginalBinEntries.AsNoTracking()
+                    .Where(b => b.Sha256 == row.Sha256).Select(b => (DateTime?)b.BinnedAt).FirstOrDefaultAsync(cancellationToken);
+                var hint = binned == null ? string.Empty
+                    : $" It is in the original bin since {binned:yyyy-MM-dd HH:mm} UTC: restore it with POST /api/v1/integrity/original-cleanup/restore (the next bin run also moves it back, because this email refers to it).";
                 return Report(emailId, IntegrityStatus.Missing, row, e, chainState,
-                    "The original is recorded but its stored content could not be found.", chainFinding);
+                    "The original is recorded but its stored content could not be found." + hint, chainFinding);
             }
 
             // The Postgres backend does not re-check the hash on read; do it here so Valid always means proven.

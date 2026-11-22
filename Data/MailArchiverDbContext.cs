@@ -20,6 +20,8 @@ namespace MailArchiver.Data
         public DbSet<IntegrityRun> IntegrityRuns { get; set; }
         public DbSet<IntegrityFinding> IntegrityFindings { get; set; }
         public DbSet<AuditChainEntry> AuditChain { get; set; }
+        public DbSet<OriginalBinEntry> OriginalBinEntries { get; set; }
+        public DbSet<OriginalCleanupRun> OriginalCleanupRuns { get; set; }
         public DbSet<AttachmentText> AttachmentTexts { get; set; }
         public DbSet<User> Users { get; set; }
         public DbSet<UserMailAccount> UserMailAccounts { get; set; }
@@ -226,6 +228,17 @@ namespace MailArchiver.Data
                 e.Property(x => x.ExtractedAt).HasColumnType("timestamp without time zone");
                 e.HasIndex(x => x.Status);
             });
+
+            // Fork (review F-11): the recycle bin for hash-named originals, and the runs of the collector.
+            modelBuilder.Entity<OriginalBinEntry>(e =>
+            {
+                e.ToTable("OriginalBinEntries", "mail_archiver");
+                e.HasKey(x => x.StoragePath);
+                e.Property(x => x.BinnedAt).HasColumnType("timestamp without time zone");
+                e.HasIndex(x => x.BinnedAt);
+                e.HasIndex(x => x.Sha256);
+            });
+            modelBuilder.Entity<OriginalCleanupRun>(e => e.ToTable("OriginalCleanupRuns", "mail_archiver"));
 
             // Fork: tamper-evident audit trail. The sequence number is assigned by the writer (under a
             // lock), never by the database, because it is part of the hash.

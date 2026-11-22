@@ -524,7 +524,8 @@ builder.Services.AddHostedService<MailArchiver.Services.Shared.IntegritySchedule
     var rawForCheck = builder.Configuration.GetSection(MailArchiver.Models.RawMessageOptions.RawMessages)
         .Get<MailArchiver.Models.RawMessageOptions>() ?? new MailArchiver.Models.RawMessageOptions();
     var leanProblems = storageMode.Validate(rawForCheck)
-        .Concat(MailArchiver.Services.Shared.RawMessageRequirement.Validate(rawForCheck)).ToList();
+        .Concat(MailArchiver.Services.Shared.RawMessageRequirement.Validate(rawForCheck))
+        .Concat(MailArchiver.Models.OriginalCleanupOptions.Validate(rawForCheck)).ToList();
     if (leanProblems.Count > 0)
     {
         throw new InvalidOperationException("Invalid lean storage configuration: " + string.Join(" ", leanProblems));
@@ -533,6 +534,9 @@ builder.Services.AddHostedService<MailArchiver.Services.Shared.IntegritySchedule
 builder.Services.AddScoped<MailArchiver.Services.Shared.RawMessageStorageMigrator>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.RawMessageOrphanCollector>();
 builder.Services.AddHostedService<MailArchiver.Services.RawMessageOrphanCleanupService>();
+// Fork (review F-11): recycle bin for hash-named originals nothing refers to (on by default, idle unless originals are hash-named files).
+builder.Services.AddSingleton<MailArchiver.Services.Shared.IOriginalBin, MailArchiver.Services.Shared.OriginalBin>();
+builder.Services.AddHostedService<MailArchiver.Services.Shared.OriginalBinService>();
 
 // EML import services (refactored from monolithic EmlImportService)
 builder.Services.AddScoped<MailArchiver.Services.Providers.Eml.EmlMailCleaner>();

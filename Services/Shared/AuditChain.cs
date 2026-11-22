@@ -115,7 +115,10 @@ namespace MailArchiver.Services.Shared
         AuditChainBreak? FirstBreak,
         IReadOnlyList<string> Warnings,
         long EmailsWithoutArchiveEntry,
-        long EmailsDeletedWithRecord = 0);
+        long EmailsDeletedWithRecord = 0,
+        long OriginalsBinned = 0,
+        long OriginalsRestored = 0,
+        long OriginalsPurged = 0);
 
     public interface IAuditChainVerifier
     {
@@ -208,14 +211,31 @@ namespace MailArchiver.Services.Shared
                 SELECT count(*) AS ""Value"" FROM mail_archiver.""AuditChain"" WHERE ""Kind"" = 'email.deleted'")
                 .SingleAsync(cancellationToken);
 
+            // F-11: the original bin. A binned or purged original is a legitimate reason for a missing FILE of a deleted email;
+            // but a row that still refers to an original whose last bin event is 'binned'/'purged' (no later restore or new
+            // store of the same bytes) is a collector fault and a finding.
+            var referencedBinned = await _db.Database.SqlQueryRaw<string>(@"
+                SELECT DISTINCT c.""Sha256"" AS ""Value"" FROM mail_archiver.""AuditChain"" c
+                JOIN mail_archiver.""RawMessages"" r ON r.""Sha256"" = c.""Sha256""
+                WHERE c.""Kind"" IN ('original.binned', 'original.purged')
+                  AND NOT EXISTS (SELECT 1 FROM mail_archiver.""AuditChain"" l
+                                  WHERE l.""Seq"" > c.""Seq"" AND l.""Sha256"" = c.""Sha256"" AND l.""Kind"" IN ('original.restored', 'original.stored'))
+                LIMIT 20").ToListAsync(cancellationToken);
+            foreach (var sha in referencedBinned)
+                warnings.Add($"Original {sha[..12]}... was binned or purged by the original bin, but an email still refers to it.");
+
+            var binned = await _db.AuditChain.AsNoTracking().LongCountAsync(c => c.Kind == "original.binned", cancellationToken);
+            var restored = await _db.AuditChain.AsNoTracking().LongCountAsync(c => c.Kind == "original.restored", cancellationToken);
+            var purged = await _db.AuditChain.AsNoTracking().LongCountAsync(c => c.Kind == "original.purged", cancellationToken);
+
             var unchained = await _db.Database.SqlQueryRaw<long>(@"
                 SELECT count(*) AS ""Value"" FROM mail_archiver.""RawMessages"" r
                 WHERE NOT EXISTS (SELECT 1 FROM mail_archiver.""AuditChain"" c
                                   WHERE c.""Kind"" = 'original.stored' AND c.""EmailId"" = r.""ArchivedEmailId"")")
                 .SingleAsync(cancellationToken);
 
-            return new AuditChainReport(broken == null && changed.Count == 0 && vanished.Count == 0 && rowGone.Count == 0,
-                count, head, broken, warnings, unchained, deletedCount);
+            return new AuditChainReport(broken == null && changed.Count == 0 && vanished.Count == 0 && rowGone.Count == 0 && referencedBinned.Count == 0,
+                count, head, broken, warnings, unchained, deletedCount, binned, restored, purged);
         }
     }
 

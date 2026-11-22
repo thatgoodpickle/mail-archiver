@@ -71,6 +71,8 @@ namespace MailArchiver.Services.Shared
                         $"The existing original at {absolute} does not match its own name; refusing to overwrite it.");
                 }
 
+                // Fork (F-11): reused, so mark it as in use now; the original bin leaves recently written files alone.
+                try { File.SetLastWriteTimeUtc(absolute, DateTime.UtcNow); } catch (IOException) { }
                 return;
             }
 
@@ -96,6 +98,7 @@ namespace MailArchiver.Services.Shared
                         var existing = RawMessageCodec.Decompress(await File.ReadAllBytesAsync(absolute), row.Size);
                         if (!string.Equals(RawMessageCodec.ComputeSha256(existing), row.Sha256, StringComparison.Ordinal))
                             throw new IOException("An existing original does not match its own name; refusing to use it.");
+                        try { File.SetLastWriteTimeUtc(absolute, DateTime.UtcNow); } catch (IOException) { }   // F-11: in use now
                     }
                 }
                 else

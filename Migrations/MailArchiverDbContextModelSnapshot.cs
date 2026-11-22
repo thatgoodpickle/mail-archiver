@@ -870,6 +870,87 @@ namespace MailArchiver.Migrations
                     b.ToTable("IntegrityRuns", "mail_archiver");
                 });
 
+            modelBuilder.Entity("MailArchiver.Models.OriginalBinEntry", b =>
+                {
+                    b.Property<string>("StoragePath")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BinPath")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("BinnedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("StoragePath");
+
+                    b.HasIndex("BinnedAt");
+
+                    b.HasIndex("Sha256");
+
+                    b.ToTable("OriginalBinEntries", "mail_archiver");
+                });
+
+            modelBuilder.Entity("MailArchiver.Models.OriginalCleanupRun", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BinRetentionDays")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Binned")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Deferred")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text");
+
+                    b.Property<int>("Errors")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("FinishedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<int>("Purged")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Referenced")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Restored")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Scanned")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("StartedBy")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("OriginalCleanupRuns", "mail_archiver");
+                });
+
             modelBuilder.Entity("MailArchiver.Models.RawMessage", b =>
                 {
                     b.Property<int>("ArchivedEmailId")

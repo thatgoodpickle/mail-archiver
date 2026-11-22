@@ -48,6 +48,9 @@ namespace MailArchiver.Models
         /// <summary>Settings of the filesystem backend, used when <see cref="Storage"/> is filesystem.</summary>
         public RawMessageFileSystemOptions FileSystem { get; set; } = new();
 
+        /// <summary>Fork (review F-11): removal of hash-named originals that no email refers to any more.</summary>
+        public OriginalCleanupOptions OriginalCleanup { get; set; } = new();
+
         /// <summary>The normalized backend the archive writes to.</summary>
         public string EffectiveStorage => RawMessageStorage.Normalize(Storage);
 

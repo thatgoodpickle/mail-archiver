@@ -23,10 +23,13 @@ public class IntegrityApiController : ApiControllerBase
     private readonly IAuditChainVerifier? _chain;
     private readonly IManifestService? _manifests;
     private readonly IAccessLogService? _accessLog;
+    private readonly IOriginalBin? _bin;
 
     public IntegrityApiController(MailArchiverDbContext context, IIntegrityRunner runner, IAuthenticationService authService,
-        IAuditChainVerifier? chain = null, IManifestService? manifests = null, IAccessLogService? accessLog = null)
+        IAuditChainVerifier? chain = null, IManifestService? manifests = null, IAccessLogService? accessLog = null,
+        IOriginalBin? bin = null)
     {
+        _bin = bin;
         _accessLog = accessLog;
         _manifests = manifests;
         _chain = chain;
@@ -39,6 +42,74 @@ public class IntegrityApiController : ApiControllerBase
     private Task LogAsync(string what)
         => _accessLog == null ? Task.CompletedTask
             : _accessLog.LogAccessAsync(_authService.GetCurrentUserDisplayName(HttpContext) ?? "unknown", AccessLogType.Integrity, searchParameters: what);
+
+    // ----- original bin (review F-11): recycle bin for hash-named originals nothing refers to -----------------------
+
+    public sealed record RestoreRequest(string Sha256);
+
+    /// <summary>Is it on, does it apply, what is in the bin, what ran last. Read-only.</summary>
+    [HttpGet("original-cleanup/status")]
+    public async Task<IActionResult> BinStatus()
+    {
+        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        var s = await _bin.GetStatusAsync();
+        return Ok(new
+        {
+            enabled = s.Enabled, applicable = s.Applicable, notApplicableReason = s.NotApplicableReason,
+            binRetentionDays = s.BinRetentionDays, intervalHours = s.IntervalHours, maxFilesPerRun = s.MaxFilesPerRun,
+            inBin = s.InBin, inBinBytes = s.InBinBytes, earliestPurgeAt = s.EarliestPurgeAt,
+            totalBinned = s.TotalBinned, totalRestored = s.TotalRestored, totalPurged = s.TotalPurged,
+            lastRun = s.LastRun == null ? null : BinRunDto(s.LastRun)
+        });
+    }
+
+    private static object BinRunDto(OriginalCleanupRun r) => new
+    {
+        id = r.Id, status = r.Status, startedAt = r.StartedAt, finishedAt = r.FinishedAt, startedBy = r.StartedBy,
+        scanned = r.Scanned, referenced = r.Referenced, binned = r.Binned, restored = r.Restored, purged = r.Purged,
+        deferred = r.Deferred, errors = r.Errors, error = r.Error
+    };
+
+    /// <summary>Runs one bin pass now in the background (202). Takes no path; works only on hash-named originals.</summary>
+    [HttpPost("original-cleanup/run")]
+    public async Task<IActionResult> BinRun()
+    {
+        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        try
+        {
+            var run = await _bin.StartAsync(_authService.GetCurrentUserDisplayName(HttpContext));
+            await LogAsync("original bin run started");
+            return Accepted(BinRunDto(run));
+        }
+        catch (InvalidOperationException ex) { return Problem(statusCode: 409, title: ex.Message); }
+    }
+
+    /// <summary>What is in the bin: sha256, when it was binned, when it will be deleted permanently, size. No paths.</summary>
+    [HttpGet("original-cleanup/bin")]
+    public async Task<IActionResult> BinList([FromQuery] int limit = 200)
+    {
+        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        var items = await _bin.ListBinAsync(limit);
+        return Ok(items.Select(i => new { sha256 = i.Sha256, binnedAt = i.BinnedAt, purgeAfter = i.PurgeAfter, size = i.Size }));
+    }
+
+    /// <summary>Moves one original back out of the bin, by SHA-256 only (never a path).</summary>
+    [HttpPost("original-cleanup/restore")]
+    public async Task<IActionResult> BinRestore([FromBody] RestoreRequest request)
+    {
+        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        var r = await _bin.RestoreAsync(request?.Sha256 ?? string.Empty, _authService.GetCurrentUserDisplayName(HttpContext));
+        return r.Restored ? Ok(new { restored = true, message = r.Message }) : Problem(statusCode: 409, title: r.Message);
+    }
+
+    /// <summary>For ONE already deleted email: is its original still shared, in the bin (and until when), or gone. Changes nothing.</summary>
+    [HttpPost("original-cleanup/erasure-status/{emailId:int}")]
+    public async Task<IActionResult> ErasureStatusFor(int emailId)
+    {
+        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        var s = await _bin.DescribeEmailAsync(emailId);
+        return Ok(new { emailId = s.EmailId, state = s.State, message = s.Message, sha256 = s.Sha256, referencedByRows = s.ReferencedByRows, binnedAt = s.BinnedAt, purgeAfter = s.PurgeAfter });
+    }
 
     private static object Dto(IntegrityRun r) => new
     {
@@ -124,6 +195,7 @@ public class IntegrityApiController : ApiControllerBase
             warnings = r.Warnings,
             emailsWithoutArchiveEntry = r.EmailsWithoutArchiveEntry,
             emailsDeletedWithRecord = r.EmailsDeletedWithRecord,
+            originalsBinned = r.OriginalsBinned, originalsRestored = r.OriginalsRestored, originalsPurged = r.OriginalsPurged,
             failedAppends = AuditChain.FailedAppends
         });
     }
