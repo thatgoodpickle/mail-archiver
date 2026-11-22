@@ -77,6 +77,12 @@ namespace MailArchiver.Models
         /// </summary>
         public bool AuditChainEnabled { get; set; } = true;
 
+        /// <summary>
+        /// Also write an 'email.labels.changed' chain entry whenever a Gmail label set of an archived email changes (default off: labels are
+        /// metadata about the email, not part of the original, and a busy mailbox changes labels a lot: one entry per change).
+        /// </summary>
+        public bool ChainLabelChanges { get; set; } = false;
+
         /// <summary>Directory the signed manifests and the signing key are written to. Relative paths resolve against the content root.</summary>
         public string ManifestPath { get; set; } = "Manifests";
 

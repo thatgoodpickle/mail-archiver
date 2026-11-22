@@ -1695,7 +1695,7 @@ namespace MailArchiver.Services.Core
         /// emails (watermark stays), not as "already archived".
         /// </summary>
         public async Task<ArchiveOutcome> ArchiveEmailOutcomeAsync(MailAccount account, MimeMessage message, bool isOutgoing, string? folderName = null,
-            RawMessageCapture? rawMessage = null)
+            RawMessageCapture? rawMessage = null, GmailMeta? gmail = null)
         {
             // Extract date with fallback handling for malformed Date headers
             var emailDate = MailContentHelper.ExtractEmailDate(message.Date, message.Headers);
@@ -1989,7 +1989,12 @@ namespace MailArchiver.Services.Core
                     BccDisplayNames = string.IsNullOrEmpty(bccDisplayNames) ? null : bccDisplayNames,
                     SentDate = convertedSentDate,
                     ReceivedDate = DateTime.UtcNow,
-                    IsOutgoing = (isOutgoingEmail || isOutgoingFolder) && !isDraftsFolder,
+                    // Fork: Gmail's Sent label also says "outgoing" (a message first seen in All Mail has no sent-mail folder to tell it).
+                    IsOutgoing = ((isOutgoingEmail || isOutgoingFolder) && !isDraftsFolder) || GmailLabels.IsSent(gmail?.Labels),
+                    Labels = gmail?.Labels.ToList(),
+                    GmailMessageId = gmail?.MessageId,
+                    GmailThreadId = gmail?.ThreadId,
+                    LabelsCapturedAt = gmail == null ? null : AuditChainHash.TruncateToMicroseconds(DateTime.UtcNow),
                     HasAttachments = allAttachments.Any(),
                     Body = body,
                     HtmlBody = htmlBody,

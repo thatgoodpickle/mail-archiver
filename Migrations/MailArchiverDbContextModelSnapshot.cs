@@ -66,6 +66,9 @@ namespace MailArchiver.Migrations
                     b.Property<DateTime?>("LastFullSync")
                         .HasColumnType("timestamp without time zone");
 
+                    b.Property<DateTime?>("LabelsRefreshedAt")
+                        .HasColumnType("timestamp without time zone");
+
                     b.Property<DateTime>("LastSync")
                         .HasColumnType("timestamp without time zone");
 
@@ -354,6 +357,12 @@ namespace MailArchiver.Migrations
                     b.Property<DateTime?>("HashCreatedAt")
                         .HasColumnType("timestamp without time zone");
 
+                    b.Property<string>("GmailMessageId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("GmailThreadId")
+                        .HasColumnType("text");
+
                     b.Property<string>("HtmlBody")
                         .IsRequired()
                         .HasColumnType("text");
@@ -365,6 +374,12 @@ namespace MailArchiver.Migrations
 
                     b.Property<bool>("IsOutgoing")
                         .HasColumnType("boolean");
+
+                    b.Property<List<string>>("Labels")
+                        .HasColumnType("text[]");
+
+                    b.Property<DateTime?>("LabelsCapturedAt")
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<int>("MailAccountId")
                         .HasColumnType("integer");

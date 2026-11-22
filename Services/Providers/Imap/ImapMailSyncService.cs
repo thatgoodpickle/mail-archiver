@@ -32,6 +32,7 @@ namespace MailArchiver.Services.Providers.Imap
         private readonly MailSyncOptions _mailSyncOptions;
         private readonly BandwidthTrackingOptions _bandwidthOptions;
         private readonly MailArchiver.Services.Shared.ISyncProblemService? _problems;
+        private readonly MailArchiver.Services.Shared.IGmailMetaService? _gmailMeta;
 
         public ImapMailSyncService(
             MailArchiverDbContext context,
@@ -46,9 +47,11 @@ namespace MailArchiver.Services.Providers.Imap
             IOptions<BatchOperationOptions> batchOptions,
             IOptions<MailSyncOptions> mailSyncOptions,
             IOptions<BandwidthTrackingOptions> bandwidthOptions,
-            MailArchiver.Services.Shared.ISyncProblemService? problems = null)
+            MailArchiver.Services.Shared.ISyncProblemService? problems = null,
+            MailArchiver.Services.Shared.IGmailMetaService? gmailMeta = null)
         {
             _problems = problems;
+            _gmailMeta = gmailMeta;
             _context = context;
             _logger = logger;
             _coreService = coreService;
@@ -338,6 +341,9 @@ namespace MailArchiver.Services.Providers.Imap
                         "{FailedFolderCount} folders that could not be synced at all",
                         account.Name, failedEmails, failedFolders);
                 }
+
+                // Fork (Gmail labels): labels change over time, so about once a day the labels of every archived message are read again.
+                await RefreshGmailLabelsAsync(account, client, cancellationToken);
 
                 await client.DisconnectAsync(true);
                 _logger.LogInformation("Sync completed for account: {AccountName}. New: {New}, Failed: {Failed}, Deleted: {Deleted}, " +
@@ -742,21 +748,74 @@ namespace MailArchiver.Services.Providers.Imap
         /// Those are not downloaded again. Anything doubtful is simply downloaded as before, so a failure here only costs time.
         /// A different message that reuses a Message-ID has a different size and is therefore still fetched.
         /// </summary>
-        private async Task<Dictionary<uint, (DateTime Date, string? MessageId)>> PreSkipKnownAsync(IMailFolder folder, MailAccount account, IList<UniqueId> batch, CancellationToken cancellationToken)
+        /// <summary>
+        /// Reads the Gmail labels of every message in the folder that holds all mail and records them on the archived emails (labels only: nothing
+        /// is downloaded). It deliberately does NOT use the account's search filter, so a message tagged Marketing AFTER it was archived is seen
+        /// and flagged. At most once a day per account; never fails the sync.
+        /// </summary>
+        private async Task RefreshGmailLabelsAsync(MailAccount account, ImapClient client, CancellationToken ct)
         {
-            var skip = new Dictionary<uint, (DateTime, string?)>();
-            if (!_coreService.StoresRawMessages || batch.Count == 0) return skip;
+            if (_gmailMeta == null || !MailArchiver.Services.Shared.GmailAccount.Is(account) || !client.Capabilities.HasFlag(ImapCapabilities.GMailExt1)) return;
+            if (account.LabelsRefreshedAt != null && DateTime.UtcNow - account.LabelsRefreshedAt.Value < TimeSpan.FromHours(24)) return;
             try
             {
-                var summaries = await folder.FetchAsync(batch, MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.Size, cancellationToken);
+                var all = client.GetFolder(SpecialFolder.All);
+                if (all == null) return;
+                await all.OpenAsync(FolderAccess.ReadOnly, ct);
+                var uids = await all.SearchAsync(SearchQuery.All, ct);
+                var changed = 0; var seen = 0;
+                for (var i = 0; i < uids.Count; i += 500)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var batch = uids.Skip(i).Take(500).ToList();
+                    var summaries = await all.FetchAsync(batch, MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.GMailLabels | MessageSummaryItems.GMailMessageId | MessageSummaryItems.GMailThreadId, ct);
+                    foreach (var s in summaries)
+                    {
+                        seen++;
+                        var meta = new MailArchiver.Services.Shared.GmailMeta(
+                            (s.GMailLabels ?? new List<string>()).Select(l => l ?? string.Empty).Where(l => l.Length > 0).ToList(), s.GMailMessageId?.ToString(), s.GMailThreadId?.ToString());
+                        changed += await _gmailMeta.ApplyAsync(account.Id, s.Envelope?.MessageId, meta, ct);
+                    }
+                    _context.ChangeTracker.Clear();
+                }
+                await _context.MailAccounts.Where(a => a.Id == account.Id).ExecuteUpdateAsync(u => u.SetProperty(a => a.LabelsRefreshedAt, DateTime.UtcNow), ct);
+                _logger.LogInformation("Gmail labels refreshed for account {AccountName}: {Seen} messages looked at, {Changed} archived emails updated", account.Name, seen, changed);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Could not refresh the Gmail labels of account {AccountName}; the sync itself is not affected", account.Name);
+            }
+        }
+
+        private async Task<(Dictionary<uint, (DateTime Date, string? MessageId)> Skip, Dictionary<uint, MailArchiver.Services.Shared.GmailMeta> Meta)> PreSkipKnownAsync(
+            IMailFolder folder, MailAccount account, IList<UniqueId> batch, ImapClient client, CancellationToken cancellationToken)
+        {
+            var skip = new Dictionary<uint, (DateTime, string?)>();
+            var meta = new Dictionary<uint, MailArchiver.Services.Shared.GmailMeta>();
+            var gmailExt = MailArchiver.Services.Shared.GmailAccount.Is(account) && client.Capabilities.HasFlag(ImapCapabilities.GMailExt1);
+            if ((!_coreService.StoresRawMessages && !gmailExt) || batch.Count == 0) return (skip, meta);
+            try
+            {
+                var items = MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.Size;
+                if (gmailExt) items |= MessageSummaryItems.GMailLabels | MessageSummaryItems.GMailMessageId | MessageSummaryItems.GMailThreadId;
+                var summaries = await folder.FetchAsync(batch, items, cancellationToken);
+
+                // Fork (Gmail labels): what Gmail says about each message travels with it.
+                if (gmailExt)
+                    foreach (var s in summaries)
+                        meta[s.UniqueId.Id] = new MailArchiver.Services.Shared.GmailMeta(
+                            (s.GMailLabels ?? new List<string>()).Select(l => l ?? string.Empty).Where(l => l.Length > 0).ToList(),
+                            s.GMailMessageId?.ToString(), s.GMailThreadId?.ToString());
+
+                if (!_coreService.StoresRawMessages) return (skip, meta);
                 var withIds = summaries.Where(s => !string.IsNullOrEmpty(s.Envelope?.MessageId) && s.Size.HasValue).ToList();
-                if (withIds.Count == 0) return skip;
+                if (withIds.Count == 0) return (skip, meta);
                 var ids = withIds.Select(s => s.Envelope!.MessageId).Distinct().ToList();
                 var known = await _context.ArchivedEmails.AsNoTracking()
                     .Where(e => e.MailAccountId == account.Id && ids.Contains(e.MessageId))
                     .Select(e => new { e.MessageId, e.FolderName, Size = e.RawMessage != null ? (long?)e.RawMessage.Size : null })
                     .ToListAsync(cancellationToken);
-                if (known.Count == 0) return skip;
+                if (known.Count == 0) return (skip, meta);
                 var gmail = MailArchiver.Services.Shared.GmailAccount.Is(account);
                 var folderName = MailContentHelper.CleanText(folder.FullName ?? string.Empty);
                 foreach (var s in withIds)
@@ -771,7 +830,7 @@ namespace MailArchiver.Services.Providers.Imap
             {
                 _logger.LogDebug(ex, "Pre-check of folder {FolderName} failed; the messages are downloaded as usual", folder.FullName);
             }
-            return skip;
+            return (skip, meta);
         }
 
         private async Task<SyncFolderResult> SyncFolderAsync(IMailFolder folder, MailAccount account, ImapClient client, string? jobId = null, CancellationToken cancellationToken = default)
@@ -1008,7 +1067,7 @@ namespace MailArchiver.Services.Providers.Imap
 
                         // Second review N-11: ask the server for envelope and size first. A message whose Message-ID and size match
                         // an email we already hold (in this folder, or anywhere for Gmail) is not downloaded again.
-                        var preSkip = await PreSkipKnownAsync(folder, account, batch, cancellationToken);
+                        var (preSkip, batchMeta) = await PreSkipKnownAsync(folder, account, batch, client, cancellationToken);
 
                         foreach (var uid in batch)
                         {
@@ -1028,6 +1087,11 @@ namespace MailArchiver.Services.Providers.Imap
                                 if (preSkip.TryGetValue(uid.Id, out var knownMessage))
                                 {
                                     result.ProcessedEmails++;
+                                    if (_gmailMeta != null && batchMeta.TryGetValue(uid.Id, out var heldMeta))
+                                    {
+                                        try { await _gmailMeta.ApplyAsync(account.Id, knownMessage.MessageId, heldMeta, cancellationToken); }
+                                        catch (Exception gex) when (gex is not OperationCanceledException) { _logger.LogWarning(gex, "Could not record the Gmail labels of UID {Uid}", uid.Id); }
+                                    }
                                     if (problems.ContainsKey(uid.Id) && _problems != null)
                                     {
                                         try { await _problems.ResolveAsync(account.Id, folder.FullName, folder.UidValidity, uid.Id, cancellationToken); } catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
@@ -1365,7 +1429,13 @@ namespace MailArchiver.Services.Providers.Imap
                                 // Fork (F-01): a refused or failed email must not look like a duplicate. Throwing here
                                 // runs the same failure handling as any other error below: FailedEmails++ and the
                                 // watermark/LastSync stay put, so the message is fetched again on the next run.
-                                var outcome = await _coreService.ArchiveEmailOutcomeAsync(account, message, isOutgoing, folder.FullName, rawMessage);
+                                batchMeta.TryGetValue(uid.Id, out var gmailMeta);
+                                var outcome = await _coreService.ArchiveEmailOutcomeAsync(account, message, isOutgoing, folder.FullName, rawMessage, gmailMeta);
+                                if (outcome == ArchiveOutcome.Duplicate && gmailMeta != null && _gmailMeta != null)
+                                {
+                                    try { await _gmailMeta.ApplyAsync(account.Id, message.MessageId, gmailMeta, cancellationToken); }
+                                    catch (Exception gex) when (gex is not OperationCanceledException) { _logger.LogWarning(gex, "Could not record the Gmail labels of UID {Uid}", uid.Id); }
+                                }
                                 if (outcome is ArchiveOutcome.Refused or ArchiveOutcome.Failed)
                                     throw new ArchiveNotStoredException(outcome);
                                 var isNew = outcome == ArchiveOutcome.Archived;

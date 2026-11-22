@@ -24,6 +24,9 @@ public class MailAccount
     /// empty = explicitly no filter. Ignored by servers that are not Gmail. Changes are recorded in the audit chain.
     /// </summary>
     public string? GmailSearchFilter { get; set; }
+
+    /// <summary>Fork: when the Gmail labels of the archived messages were last refreshed from the server (once a day at most).</summary>
+    public DateTime? LabelsRefreshedAt { get; set; }
     
     // Email deletion functionality
     public int? DeleteAfterDays { get; set; }

@@ -55,6 +55,14 @@ namespace MailArchiver.Models
         public string? AttachmentText { get; set; }
         public DateTime? AttachmentTextAt { get; set; }
 
+        // Fork (Gmail labels): the labels Gmail had on this message at LabelsCapturedAt (system labels start with a backslash, for
+        // example \Sent, \Important). This is Gmail's metadata ABOUT the message, not part of the stored original, so it is not
+        // covered by the original's hash: it is recorded as "labels as of the last sync" and refreshed by later syncs.
+        public List<string>? Labels { get; set; }
+        public string? GmailMessageId { get; set; }
+        public string? GmailThreadId { get; set; }
+        public DateTime? LabelsCapturedAt { get; set; }
+
         public virtual MailAccount MailAccount { get; set; }
         public virtual ICollection<EmailAttachment> Attachments { get; set; } = new List<EmailAttachment>();
 
