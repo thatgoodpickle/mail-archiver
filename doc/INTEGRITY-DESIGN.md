@@ -405,6 +405,59 @@ days, and from then on the archive no longer proves what those emails contained.
 The grace period is counted from when the bin moved the file, not from when the email was deleted (a deletion is
 noticed within `IntervalHours`).
 
+### The Integrity & Storage page and its settings (2026-11-22, CI green, 1572 tests)
+
+An admin-only page (menu entry "Integrity & Storage", web login, not the API keys) makes the integrity features usable without
+curl, and lets admins change the day-to-day settings in the app instead of only by environment variable.
+
+**What is on the page** (every action is also available through the API; the page calls the same services):
+- *Overview:* last verify-all run with counters and "Run verify-all now" (progress is polled); "Check audit chain" (ok, entries, first
+  break, warnings, binned/restored/purged originals, deleted-with-record, unchained); the chain-head line with a copy button.
+- *Signed manifests:* list, "Create signed manifest", per-manifest "Verify", downloads of the json, sig and entries file and of
+  `public-key.pem` (the download takes only a validated manifest name and a kind; it never takes a path, refuses symbolic links),
+  and the exact `openssl dgst` command to copy.
+- *Original bin:* status, the list (short hash, binned at, deleted-for-good date, size), "Restore" per item, "Run now" (confirms first,
+  because it also purges what is past retention).
+- *Attachment text / OCR:* counts, engine string, whether the models are present, "Rescan failed" and "Rescan needs-OCR" (confirm first;
+  "rescan all" is deliberately not offered).
+- *Settings:* below. A section that fails to load shows its error and the rest of the page still works.
+
+**Settings: three kinds.** Precedence is environment variable, then database, then built-in default.
+
+| Group | Settings | Limits |
+|---|---|---|
+| **Locked** (read-only, shown with the variable that sets it) | `Storage:Mode`, `RawMessages:Enabled/Storage/FileSystem:BasePath/FileSystem:HashNamed/Required/MaxMessageSizeMb/IncludeGraph`, `Integrity:AuditChainEnabled/ManifestPath/ManifestKeyPath/AllowNewKey`, `Storage:AllowSerializedImports/AllowHashNamedMigration` | none: no endpoint of the page can change them |
+| **Editable** | `Integrity:VerifyAllIntervalHours`, `Integrity:ManifestIntervalHours` | 0 (off) to 8760 |
+| | `RawMessages:OriginalCleanup:Enabled` | true/false |
+| | `RawMessages:OriginalCleanup:BinRetentionDays` | 7 to 3650 (the environment variable may go lower) |
+| | `RawMessages:OriginalCleanup:IntervalHours` / `MaxFilesPerRun` | 1 to 168 / 1 to 100000 |
+| | `Ocr:Mode` | off, cpu, gpu |
+| | `Ocr:Threads` / `MaxPages` / `MaxImagePixels` / `TimeoutSecondsPerImage` | 1-16 / 1-200 / 100000-200000000 / 1-600 |
+| **Pinned** (an editable one that the host sets with an environment variable) | any editable key with its variable set | the page shows it locked: "set by environment variable X"; a stored value is ignored |
+
+A value from `appsettings.json` does not pin; only environment variables and command-line arguments do.
+
+**Rules of a change.** Server-side validation against the limits; locked and pinned keys are refused; the chain entry
+`setting.changed` (key, old, new, actor, whether it was risky, whether it was a reset) and an access-log row of type Integrity are
+written BEFORE the change is saved, and when either cannot be written the change is not applied (a failure after the chain entry is
+recorded as `setting.change.failed`). If the audit chain is switched off by the locked setting, the access-log row alone is
+required. Each editable setting has "Reset to default". **Risky changes need the admin's own password:** shortening the bin
+retention, switching the bin off, any change of the OCR mode, and switching a schedule off (a longer or shorter interval is not
+risky). A reset that would shorten the retention is risky too. An account without a local password (single sign-on) cannot confirm
+and is told to set the environment variable on the host instead. Wrong passwords are limited: 5 in 15 minutes per admin.
+
+**Live or restart.** The schedules, the bin settings, `Ocr:Mode`, `MaxPages`, `MaxImagePixels` and `TimeoutSecondsPerImage` apply
+within about 30 seconds without a restart (the background services read an options monitor on every tick or item). `Ocr:Threads`
+applies after a restart (the OCR engine builds its session once); the page says so next to the field. A stored value that is invalid,
+or that is below the page's floor, is ignored and logged; a failure to read the settings table at start-up never stops the app.
+
+**Honest limits.** (1) An admin web session can change the editable settings; the
+protection is the limits, the password for risky changes, the audit entry for every change, and the locked group, not secrecy.
+(2) The password check protects against a hijacked browser session, not against someone who has the host: they can set environment
+variables. (3) The record is written before the change but cannot be in the same database transaction (the chain writer has its own),
+so a crash between the two leaves a record of a change that did not happen; the verifier and the access log make that visible.
+(4) The page was built and tested through the build and test pipeline; the page itself has not been opened in a browser by the builder.
+
 ## Phase 1: make the original mandatory, prove it
 
 1. `RawMessages:Required` (default false, so upstream behaviour is unchanged): when true,

@@ -313,6 +313,21 @@ The optional MCP (Model Context Protocol) server exposes the same read-only mail
   ```
 - `MailSync__ExcludeSubfolders`: Whether an exclusion entry also covers the folders below the one it names. Applies to the per-account list and the installation-wide one alike, and to both providers. Default `false`, matching the behaviour before the option existed: an entry `Deleted Items` matches only that folder, and a tree is kept out of the archive by naming its root and every folder below it. Set to `true` to have an entry take the tree underneath as well — an entry `Deleted Items` then also keeps `Deleted Items/2024` and the rest of that branch out of the archive. The rule anchors on the path separator, so it takes whole folders and never part of a name: `Archive` covers `Archive` and `Archive/Team`, and leaves a mail folder called `Team Archive Review` alone. A `.` counts as a separator too, the same way the path-suffix rule treats it.
 
+### 🛡️ Integrity & Storage page and settings (fork)
+
+Admins have an **Integrity & Storage** entry in the menu. It runs verify-all, checks the audit chain, creates and verifies signed
+manifests, shows and restores the original bin, shows attachment text / OCR status, and shows and changes settings.
+
+- **Locked** settings (storage mode, originals location, `RawMessages__Required`, the audit chain, key locations ...) are shown
+  read-only with the environment variable that sets them. They can only be changed on the host.
+- **Editable** settings (verify-all and manifest schedules, the original bin and its retention, OCR mode, threads and limits) are stored in
+  the database and apply right away (OCR threads after a restart). Changes that lower a protection need your password.
+- **An environment variable pins a setting.** If, for example, `RawMessages__OriginalCleanup__BinRetentionDays` is set, the page shows it
+  as locked and ignores any stored value. Remove the variable to edit it on the page again. Values in `appsettings.json` do not pin.
+- Every change is written to the audit chain and the access log, with the old and the new value, before it is applied.
+
+See `doc/INTEGRITY-DESIGN.md` ("The Integrity & Storage page and its settings") for the limits of each setting.
+
 ### 📧 Original Message Storage Settings
 
 By default the archive keeps only the parsed parts of an email, so an exported `.eml` is
