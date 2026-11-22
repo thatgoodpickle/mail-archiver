@@ -264,7 +264,7 @@ namespace MailArchiver.Controllers
                 return View(nameof(Index), vm);
             }
 
-            TempData["SettingsOk"] = result.Applied || result.NotApplied.Count == 0;
+            TempData["SettingsOk"] = result.Applied;   // true: saved (or nothing to change); false: nothing was applied
             TempData["SettingsMessage"] = result.Message;
             if (result.AppliedLines.Count > 0) TempData["SettingsApplied"] = string.Join("\n", result.AppliedLines);
             if (result.NotApplied.Count > 0) TempData["SettingsNotApplied"] = string.Join("\n", result.NotApplied);

@@ -302,7 +302,8 @@ namespace MailArchiver.Services.Shared
     public sealed record SettingChange(string Key, string? Value, bool Reset = false);
 
     /// <summary>
-    /// The outcome of saving several settings at once. <see cref="Applied"/> is true when at least one change was applied.
+    /// The outcome of saving several settings at once. <see cref="Applied"/> is true when the save went through (changes were applied, or
+    /// there was nothing to change) and false when nothing was applied because of an error, a missing password or a failed record.
     /// <see cref="RowErrors"/> holds a plain-language error per setting key: when it is not empty NOTHING was applied.
     /// <see cref="NotApplied"/> lists risky changes that could not be made because the account has no local password
     /// (single sign-on); the safe changes of the same save are still applied.

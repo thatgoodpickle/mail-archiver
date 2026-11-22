@@ -316,12 +316,15 @@ The optional MCP (Model Context Protocol) server exposes the same read-only mail
 ### 🛡️ Integrity & Storage page and settings (fork)
 
 Admins have an **Integrity & Storage** entry in the menu. It runs verify-all, checks the audit chain, creates and verifies signed
-manifests, shows and restores the original bin, shows attachment text / OCR status, and shows and changes settings.
+signed records (manifests), shows and restores the Trash for deleted emails' originals, shows attachment text / OCR status, and shows and changes settings.
 
 - **Locked** settings (storage mode, originals location, `RawMessages__Required`, the audit chain, key locations ...) are shown
   read-only with the environment variable that sets them. They can only be changed on the host.
-- **Editable** settings (verify-all and manifest schedules, the original bin and its retention, OCR mode, threads and limits) are stored in
-  the database and apply right away (OCR threads after a restart). Changes that lower a protection need your password.
+- **Editable** settings (verify-all and manifest schedules, the Trash and how long it keeps originals, OCR mode, threads and limits) are stored in
+  the database and apply right away (OCR threads after a restart). They are ONE form with ONE **Save** button: either all of your changes are
+  saved or none. When a pending change lowers a protection (shortening the Trash time, switching the Trash or a schedule off, changing the OCR
+  mode), pressing Save opens a dialog that lists exactly what will change and asks for your password; otherwise Save applies straight away. An
+  account that signs in with single sign-on cannot confirm such changes and must use the environment variable on the host.
 - **An environment variable pins a setting.** If, for example, `RawMessages__OriginalCleanup__BinRetentionDays` is set, the page shows it
   as locked and ignores any stored value. Remove the variable to edit it on the page again. Values in `appsettings.json` do not pin.
 - Every change is written to the audit chain and the access log, with the old and the new value, before it is applied.
@@ -357,10 +360,10 @@ complete original is stored as well.
 | `Storage__Mode` | `Standard` | Fork option: `Lean` archives from the verified original and keeps only index data in the database. Requires `RawMessages__Enabled=true`, `RawMessages__Storage=filesystem`, `RawMessages__FileSystem__HashNamed=true` and `RawMessages__MaxMessageSizeMb=0`; the application refuses to start otherwise. |
 | `RawMessages__FileSystem__VerifyChecksumOnRead` | `true` | Verify the SHA-256 on every download. |
 | `RawMessages__FileSystem__OrphanCleanupEnabled` | `true` | Remove message files that no email refers to. |
-| `RawMessages__OriginalCleanup__Enabled` | `true` | Fork option, **on by default**: the original bin. Hash-named originals that no email refers to are moved to `.bin/` and deleted permanently after `BinRetentionDays`. Does nothing unless originals are hash-named filesystem files (`RawMessages__FileSystem__HashNamed=true`, as in lean mode). Set `false` to switch it off; deleted emails' originals are then never removed. |
-| `RawMessages__OriginalCleanup__BinRetentionDays` | `30` | Days an original stays in the bin (restorable) before it is deleted for good. Minimum 1. |
-| `RawMessages__OriginalCleanup__IntervalHours` | `1` | How often the bin runs. Minimum 1. |
-| `RawMessages__OriginalCleanup__MaxFilesPerRun` | `1000` | Cap on files moved into the bin, and separately on files purged, per run. Minimum 1. |
+| `RawMessages__OriginalCleanup__Enabled` | `true` | Fork option, **on by default**: the **Trash** for deleted emails' originals (the option names still say "Bin" for compatibility). Hash-named originals that no email refers to are moved to the `.bin/` folder and deleted permanently after `BinRetentionDays`. Does nothing unless originals are hash-named filesystem files (`RawMessages__FileSystem__HashNamed=true`, as in lean mode). Set `false` to switch it off; deleted emails' originals are then never removed. |
+| `RawMessages__OriginalCleanup__BinRetentionDays` | `30` | Days an original stays in the Trash (restorable) before it is deleted for good. Minimum 1 here; the page enforces at least 7. |
+| `RawMessages__OriginalCleanup__IntervalHours` | `1` | How often the Trash is checked. Minimum 1. |
+| `RawMessages__OriginalCleanup__MaxFilesPerRun` | `1000` | Cap on files moved into the Trash, and separately on files erased, per run. Minimum 1. |
 | `RawMessages__OriginalCleanup__StartupDelayMinutes` | `15` | Delay before the first scheduled run. |
 | `RawMessages__FileSystem__OrphanCleanupIntervalHours` | `24` | How often that sweep runs. |
 | `RawMessages__FileSystem__OrphanCleanupGraceHours` | `24` | Files younger than this are never removed. |

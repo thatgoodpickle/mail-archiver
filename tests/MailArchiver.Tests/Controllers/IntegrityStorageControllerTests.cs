@@ -137,9 +137,9 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
         public IServiceScope Scope = null!;
     }
 
-    private Kit NewKit()
+    private Kit NewKit(Action<Mock<IUserService>>? users = null, bool chainFails = false)
     {
-        var k = new Kit { Settings = SettingsKit.Create(_fixture.ConnectionString) };
+        var k = new Kit { Settings = SettingsKit.Create(_fixture.ConnectionString, null, users, chainFails) };
         k.Db = SettingsKit.NewContext(_fixture.ConnectionString);
         k.Scope = k.Settings.Sp.CreateScope();
 
@@ -172,7 +172,16 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
         return JsonSerializer.SerializeToElement(json.Value);
     }
 
-    // ------------------------------------------------------------------------------------ settings through the page
+    // ------------------------------------------------------------------------------------ settings through the page: ONE save
+
+    private static FormCollection Form(params (string Name, string Value)[] fields)
+        => new(fields.ToDictionary(f => f.Name, f => new Microsoft.Extensions.Primitives.StringValues(f.Value)));
+
+    private static IntegrityStorageViewModel ShownAgain(IActionResult result)
+        => Assert.IsType<IntegrityStorageViewModel>(Assert.IsType<ViewResult>(result).Model);
+
+    private async Task<string?> StoredAsync(Kit k, string key)
+        => (await k.Db.AppSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == key))?.Value;
 
     [Theory]
     [InlineData("Storage:Mode", "Lean")]
@@ -181,53 +190,159 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
     [InlineData("Integrity:AuditChainEnabled", "false")]
     [InlineData("Integrity:AllowNewKey", "true")]
     [InlineData("Storage:AllowSerializedImports", "true")]
-    public async Task ChangeSetting_OnALockedSetting_IsRefused_AndNothingChanges(string key, string value)
+    public async Task SaveSettings_OnALockedSetting_IsRefused_AndNothingChanges(string key, string value)
     {
         var k = NewKit();
-        var result = await k.Controller.ChangeSetting(key, value, "secret");
+        var vm = ShownAgain(await k.Controller.SaveSettings(Form(("v_" + key, value), ("password", "secret"))));
 
-        Assert.IsType<RedirectResult>(result);
-        Assert.Equal(false, k.Controller.TempData["SettingsOk"]);
-        Assert.Contains("locked", (string)k.Controller.TempData["SettingsMessage"]!);
-        Assert.False(await k.Db.AppSettings.AnyAsync(s => s.Key == key));
+        Assert.Contains("locked", vm.SettingErrors[key]);
+        Assert.False(await k.Db.AppSettings.AnyAsync());
         Assert.Empty(k.Settings.Chain.Entries);
     }
 
     [Fact]
-    public async Task ChangeSetting_OnAnEditableSetting_IsRecorded_AndShownToTheAdmin()
+    public async Task SaveSettings_SafeChanges_SaveStraightAway_WithoutAPassword_OneRecordEach()
     {
         var k = NewKit();
-        var result = await k.Controller.ChangeSetting("Ocr:MaxPages", "44", null);
+        var result = await k.Controller.SaveSettings(Form(("v_Ocr:MaxPages", "44"), ("v_Ocr:TimeoutSecondsPerImage", "12")));
 
         var redirect = Assert.IsType<RedirectResult>(result);
         Assert.EndsWith("#settings", redirect.Url);
         Assert.Equal(true, k.Controller.TempData["SettingsOk"]);
-        Assert.Equal("44", (await k.Db.AppSettings.AsNoTracking().SingleAsync(s => s.Key == "Ocr:MaxPages")).Value);
+        Assert.Equal("44", await StoredAsync(k, "Ocr:MaxPages"));
+        Assert.Equal("12", await StoredAsync(k, "Ocr:TimeoutSecondsPerImage"));
         Assert.Equal("admin", (await k.Db.AppSettings.AsNoTracking().SingleAsync(s => s.Key == "Ocr:MaxPages")).UpdatedBy);
-        Assert.Single(k.Settings.Chain.Entries, e => e.Kind == "setting.changed");
+        Assert.Equal(2, k.Settings.Chain.Entries.Count(e => e.Kind == "setting.changed"));
+        Assert.Equal(2, k.Settings.Log.Rows.Count(r => r.Type == AccessLogType.Integrity));
+        Assert.Contains("Pages read from a scanned PDF", (string)k.Controller.TempData["SettingsApplied"]!);
     }
 
     [Fact]
-    public async Task ChangeSetting_WithoutAKey_OrWithAnUnknownOne_ChangesNothing()
+    public async Task SaveSettings_OneBadRow_BlocksTheWholeSave_AndEachBadRowSaysWhy()
     {
         var k = NewKit();
-        await k.Controller.ChangeSetting(null, "1", null);
-        await k.Controller.ChangeSetting("Not:AKey", "1", null);
+        var vm = ShownAgain(await k.Controller.SaveSettings(Form(("v_Ocr:MaxPages", "44"), ("v_Ocr:Threads", "99"), ("v_Ocr:MaxImagePixels", "abc"))));
+
+        Assert.Equal(new[] { "Ocr:MaxImagePixels", "Ocr:Threads" }, vm.SettingErrors.Keys.OrderBy(x => x).ToArray());   // the good row has no error
+        Assert.Equal("44", vm.PostedValues["Ocr:MaxPages"]);        // what was typed is shown again
+        Assert.Equal("99", vm.PostedValues["Ocr:Threads"]);
+        Assert.False(await k.Db.AppSettings.AnyAsync());            // nothing was applied, not even the good row
+        Assert.Empty(k.Settings.Chain.Entries);
+        Assert.Empty(k.Settings.Log.Rows);
+    }
+
+    [Fact]
+    public async Task SaveSettings_ALockedRowAmongGoodOnes_BlocksTheWholeSave()
+    {
+        var k = NewKit();
+        var vm = ShownAgain(await k.Controller.SaveSettings(Form(("v_Ocr:MaxPages", "44"), ("v_Storage:Mode", "Lean"))));
+        Assert.Single(vm.SettingErrors, e => e.Key == "Storage:Mode");
+        Assert.False(await k.Db.AppSettings.AnyAsync());
+    }
+
+    [Fact]
+    public async Task SaveSettings_AMixOfSafeAndRisky_NeedsThePassword_TheServerEnforcesIt_AndNothingIsAppliedWithoutIt()
+    {
+        var k = NewKit();
+        var mixed = new[] { ("v_Ocr:MaxPages", "44"), ("v_RawMessages:OriginalCleanup:BinRetentionDays", "7") };   // 30 -> 7 shortens: risky
+
+        // No password at all (the dialog was bypassed): refused, and the safe row is not applied either.
+        var none = ShownAgain(await k.Controller.SaveSettings(Form(mixed)));
+        Assert.False(string.IsNullOrEmpty(none.PasswordProblem));
+        Assert.Equal("44", none.PostedValues["Ocr:MaxPages"]);
+        Assert.False(await k.Db.AppSettings.AnyAsync());
+
+        // A wrong password: refused.
+        var wrong = ShownAgain(await k.Controller.SaveSettings(Form(mixed.Append(("password", "nope")).ToArray())));
+        Assert.Contains("not correct", wrong.PasswordProblem);
+        Assert.False(await k.Db.AppSettings.AnyAsync());
+        Assert.Empty(k.Settings.Chain.Entries);
+
+        // The right password: both are applied, one record each.
+        var ok = await k.Controller.SaveSettings(Form(mixed.Append(("password", "secret")).ToArray()));
+        Assert.IsType<RedirectResult>(ok);
+        Assert.Equal("44", await StoredAsync(k, "Ocr:MaxPages"));
+        Assert.Equal("7", await StoredAsync(k, "RawMessages:OriginalCleanup:BinRetentionDays"));
+        Assert.Equal(2, k.Settings.Chain.Entries.Count(e => e.Kind == "setting.changed"));
+    }
+
+    [Fact]
+    public async Task SaveSettings_WithoutALocalPassword_TheSafeChangesApply_TheRiskyOnesDoNot_AndTheMessageSaysSo()
+    {
+        var k = NewKit(users: m => m.Setup(u => u.GetUserByIdAsync(It.IsAny<int>()))
+            .ReturnsAsync(new User { Id = 1, Username = "admin", PasswordHash = null, OAuthRemoteUserId = "sso-subject" }));
+
+        var result = await k.Controller.SaveSettings(Form(("v_Ocr:MaxPages", "44"), ("v_RawMessages:OriginalCleanup:BinRetentionDays", "7"), ("password", "secret")));
+
+        Assert.IsType<RedirectResult>(result);
+        Assert.Equal(true, k.Controller.TempData["SettingsOk"]);
+        Assert.Equal("44", await StoredAsync(k, "Ocr:MaxPages"));
+        Assert.Null(await StoredAsync(k, "RawMessages:OriginalCleanup:BinRetentionDays"));
+        Assert.Contains("single sign-on", (string)k.Controller.TempData["SettingsNotApplied"]!);
+        Assert.Contains("RawMessages__OriginalCleanup__BinRetentionDays", (string)k.Controller.TempData["SettingsNotApplied"]!);
+        Assert.Single(k.Settings.Chain.Entries, e => e.Kind == "setting.changed");   // only the applied change is recorded
+    }
+
+    [Fact]
+    public async Task SaveSettings_WithoutALocalPassword_OnlyRiskyChanges_AppliesNothing()
+    {
+        var k = NewKit(users: m => m.Setup(u => u.GetUserByIdAsync(It.IsAny<int>()))
+            .ReturnsAsync(new User { Id = 1, Username = "admin", PasswordHash = null, OAuthRemoteUserId = "sso-subject" }));
+
+        await k.Controller.SaveSettings(Form(("v_RawMessages:OriginalCleanup:BinRetentionDays", "7")));
+
+        Assert.Equal(false, k.Controller.TempData["SettingsOk"]);
+        Assert.False(await k.Db.AppSettings.AnyAsync());
+        Assert.Empty(k.Settings.Chain.Entries);
+    }
+
+    [Fact]
+    public async Task SaveSettings_WhenTheRecordCannotBeWritten_NothingIsApplied()
+    {
+        var k = NewKit(chainFails: true);
+        await k.Controller.SaveSettings(Form(("v_Ocr:MaxPages", "44"), ("v_Ocr:TimeoutSecondsPerImage", "12")));
+
         Assert.Equal(false, k.Controller.TempData["SettingsOk"]);
         Assert.False(await k.Db.AppSettings.AnyAsync());
     }
 
     [Fact]
-    public async Task ResetSetting_GoesThroughTheSameRules()
+    public async Task SaveSettings_UnchangedValues_ChangeNothing_AndWriteNoRecord()
     {
         var k = NewKit();
-        await k.Controller.ChangeSetting("Ocr:MaxPages", "44", null);
-        await k.Controller.ResetSetting("Ocr:MaxPages", null);
-        Assert.Equal(true, k.Controller.TempData["SettingsOk"]);
-        Assert.False(await k.Db.AppSettings.AnyAsync(s => s.Key == "Ocr:MaxPages"));
+        var current = (await k.Settings.ViewAsync("Ocr:MaxPages")).Value;
+        await k.Controller.SaveSettings(Form(("v_Ocr:MaxPages", current)));
 
-        await k.Controller.ResetSetting("Storage:Mode", "secret");
-        Assert.Equal(false, k.Controller.TempData["SettingsOk"]);
+        Assert.Equal(true, k.Controller.TempData["SettingsOk"]);
+        Assert.False(await k.Db.AppSettings.AnyAsync());
+        Assert.Empty(k.Settings.Chain.Entries);
+    }
+
+    [Fact]
+    public async Task SaveSettings_AResetOnlyMarksTheRow_UntilSave_AndThenGoesBackToTheStandardValue()
+    {
+        var k = NewKit();
+        await k.Controller.SaveSettings(Form(("v_Ocr:MaxPages", "44")));
+        Assert.Equal("44", await StoredAsync(k, "Ocr:MaxPages"));
+
+        await k.Controller.SaveSettings(Form(("r_Ocr:MaxPages", "1")));
+        Assert.Null(await StoredAsync(k, "Ocr:MaxPages"));
+        Assert.Equal(2, k.Settings.Chain.Entries.Count(e => e.Kind == "setting.changed"));
+
+        // A reset wins over a value typed for the same setting.
+        await k.Controller.SaveSettings(Form(("v_Ocr:MaxPages", "50")));
+        await k.Controller.SaveSettings(Form(("v_Ocr:MaxPages", "60"), ("r_Ocr:MaxPages", "1")));
+        Assert.Null(await StoredAsync(k, "Ocr:MaxPages"));
+    }
+
+    [Fact]
+    public async Task SaveSettings_ReshowsThePageWithWhatWasTyped_AndOpensTheDialogAgainWhenThePasswordWasWrong()
+    {
+        var k = NewKit();
+        var vm = ShownAgain(await k.Controller.SaveSettings(Form(("v_RawMessages:OriginalCleanup:BinRetentionDays", "7"), ("password", "nope"))));
+        Assert.Equal("7", vm.PostedValues["RawMessages:OriginalCleanup:BinRetentionDays"]);
+        Assert.NotNull(vm.PasswordProblem);
+        Assert.True(vm.HasLocalPassword);
     }
 
     // ------------------------------------------------------------------------------------ actions

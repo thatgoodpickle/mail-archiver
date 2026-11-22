@@ -654,4 +654,79 @@ public class LiveSettingsTests
         Assert.False(await worker.RoundAsync(CancellationToken.None));
         processor.Verify(p => p.ProcessBatchAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    // ------------------------------------------------------------------------------------------ the page's single Save
+
+    [Fact]
+    public async Task HasLocalPassword_IsTrueForAPasswordAccount_FalseForSingleSignOn()
+    {
+        Assert.True(await NewHarness().Sp.CreateScope().ServiceProvider.GetRequiredService<ISettingsService>().HasLocalPasswordAsync(new SettingActor(1, "admin")));
+
+        var sso = NewHarness(users: m => m.Setup(u => u.GetUserByIdAsync(It.IsAny<int>()))
+            .ReturnsAsync(new User { Id = 1, Username = "admin", PasswordHash = null, OAuthRemoteUserId = "sub" }));
+        Assert.False(await sso.Sp.CreateScope().ServiceProvider.GetRequiredService<ISettingsService>().HasLocalPasswordAsync(new SettingActor(1, "admin")));
+    }
+
+    [Fact]
+    public async Task ChangeMany_NothingToChange_IsASuccess_AndWritesNothing()
+    {
+        var h = NewHarness();
+        using var scope = h.Sp.CreateScope();
+        var r = await scope.ServiceProvider.GetRequiredService<ISettingsService>().ChangeManyAsync(
+            new[] { new SettingChange("Ocr:MaxPages", "20") }, new SettingActor(1, "admin"), null);   // 20 is the standard value
+        Assert.True(r.Applied);
+        Assert.Empty(r.RowErrors);
+        Assert.Empty(h.Chain.Entries);
+        Assert.Null(await StoredAsync("Ocr:MaxPages"));
+    }
+
+    [Fact]
+    public async Task ChangeMany_EveryBadRowIsReported_AndNothingIsApplied()
+    {
+        var h = NewHarness();
+        using var scope = h.Sp.CreateScope();
+        var r = await scope.ServiceProvider.GetRequiredService<ISettingsService>().ChangeManyAsync(new[]
+        {
+            new SettingChange("Ocr:MaxPages", "44"), new SettingChange("Ocr:Threads", "0"), new SettingChange("Ocr:Mode", "turbo"),
+            new SettingChange("Storage:Mode", "Lean"), new SettingChange("No:SuchSetting", "1")
+        }, new SettingActor(1, "admin"), "secret");
+
+        Assert.False(r.Applied);
+        Assert.Equal(4, r.RowErrors.Count);
+        Assert.False(r.RowErrors.ContainsKey("Ocr:MaxPages"));
+        Assert.Null(await StoredAsync("Ocr:MaxPages"));
+        Assert.Empty(h.Chain.Entries);
+    }
+
+    // ------------------------------------------------------------------------------------------ wording and the password rule
+
+    [Fact]
+    public void Catalog_EveryRiskyEditableSetting_SaysWhenThePasswordIsAsked_AndTheClientRuleMatchesTheServerRule()
+    {
+        foreach (var d in SettingsCatalog.Editable)
+        {
+            if (d.Risky == null) { Assert.Null(d.PasswordRule); continue; }
+            Assert.False(string.IsNullOrEmpty(d.RiskyNote), d.Key);
+            Assert.False(string.IsNullOrEmpty(d.PasswordRule), d.Key);
+
+            // What the page's script decides for the dialog must be what the server decides.
+            switch (d.PasswordRule)
+            {
+                case "off": Assert.True(d.Risky("true", "false")); Assert.False(d.Risky("false", "true")); break;
+                case "lower": Assert.True(d.Risky("30", "7")); Assert.False(d.Risky("30", "60")); Assert.False(d.Risky("30", "30")); break;
+                case "zero": Assert.True(d.Risky("24", "0")); Assert.False(d.Risky("24", "12")); Assert.False(d.Risky("0", "0")); break;
+                case "change": Assert.True(d.Risky("cpu", "off")); Assert.False(d.Risky("cpu", "cpu")); break;
+                default: Assert.Fail($"{d.Key}: unknown rule {d.PasswordRule}"); break;
+            }
+        }
+    }
+
+    [Fact]
+    public void Catalog_NoVisibleTextSaysBin_ItIsCalledTheTrash()
+    {
+        foreach (var d in SettingsCatalog.All)
+            foreach (var text in new[] { d.Label, d.Help, d.RiskyNote, d.RestartNote })
+                Assert.DoesNotMatch(@"\b[Bb]in\b", text ?? string.Empty);
+        Assert.Contains(SettingsCatalog.All, d => d.Label.Contains("Trash"));
+    }
 }

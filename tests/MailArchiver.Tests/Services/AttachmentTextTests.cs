@@ -454,6 +454,10 @@ public class AttachmentTextProcessorTests : IDisposable
                 Assert.Equal(AttachmentText.Failed, (await read.AttachmentTexts.SingleAsync(t => t.Sha256 == sha)).Status);
             Assert.Empty(await SearchAsync(svc, account, word));
 
+            // The page can say WHY: the reason of the failed result is in the status.
+            var failedStatus = await NewProcessor(ctx, hydrator, new AttachmentTextOptions { Mode = "cpu", MaxAttachmentMb = 0 }).GetStatusAsync();
+            Assert.Contains(failedStatus.Failures!, f => f.Reason == "too large" && f.Count >= 1);
+
             var proc = NewProcessor(ctx, hydrator);
             Assert.True(await proc.RescanAsync(all: false) >= 1);
             await DrainAsync(proc);

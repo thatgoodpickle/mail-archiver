@@ -353,7 +353,11 @@ re-created while manifests exist unless `Integrity:AllowNewKey`.
 - *Decisions waiting for the user:* F-11 (what deleting an email does to its hash-named original) and F-21 (a
   versioned chain hash input). See REVIEW-fixes-status.md.
 
-### The original bin: deleting an email really removes its original, after 30 days (review F-11, 2026-11-22, CI green, 1500 tests)
+### The Trash: deleting an email really removes its original, after 30 days (review F-11, 2026-11-22, CI green, 1500 tests)
+
+**Naming.** Everything a user sees (the page, buttons, messages, these docs) says **Trash**. The code keeps the old name "bin" so nothing breaks:
+the option names (`RawMessages__OriginalCleanup__BinRetentionDays` ...), the routes (`original-cleanup/bin`), the `.bin/` folder, the table
+`OriginalBinEntries` and the chain entry kinds `original.binned`, `original.restored`, `original.purged`.
 
 **It is ON by default.** Switch it off with `RawMessages__OriginalCleanup__Enabled=false`. It only ever acts on
 hash-named originals on the filesystem (lean mode uses them), so on an archive without `HashNamed` it does nothing and
@@ -362,18 +366,18 @@ says so in the log and in `GET /api/v1/integrity/original-cleanup/status` (`appl
 Why it exists: hash-named originals are shared by byte-identical emails, so they were never deleted with an email (the
 review found that deletion and retention did not remove the original). Now, like a recycle bin:
 
-1. **Bin.** A hash-named file that NO `RawMessages` row refers to is MOVED (atomic rename, then verified by size and
+1. **Trash.** A hash-named file that NO `RawMessages` row refers to is MOVED (atomic rename, then verified by size and
    by hashing the decompressed content) to `.bin/` under the originals folder, same layout. The reference check is
    repeated right before the move and right after it (a row that appeared meanwhile undoes the move). The first run
-   after an upgrade moves files that are already unreferenced into the bin; it deletes nothing outright.
-2. **Hold.** The file stays in the bin for `BinRetentionDays` (default 30, minimum 1), counted from the day it was
-   binned (`OriginalBinEntries.BinnedAt`). Nothing is purged earlier, however old the file was.
-3. **Restore.** If a row refers to a binned file again (the same bytes were archived again, or the email came back),
-   the next run moves it back (or drops the bin copy when a live copy was written again). An admin can also move one
+   after an upgrade moves files that are already unreferenced into the Trash; it deletes nothing outright.
+2. **Hold.** The file stays in the Trash for `BinRetentionDays` (default 30, minimum 1), counted from the day it was
+   moved there (`OriginalBinEntries.BinnedAt`). Nothing is purged earlier, however old the file was.
+3. **Restore.** If a row refers to a file in the Trash again (the same bytes were archived again, or the email came back),
+   the next run moves it back (or drops the Trash copy when a live copy was written again). An admin can also move one
    back by SHA-256: `POST /api/v1/integrity/original-cleanup/restore` with `{"sha256": "..."}` (never a path). A restored
    original stays live for at least a day so it can be re-imported; if nothing refers to it after that, it returns to
-   the bin with a fresh retention period.
-4. **Purge.** After the retention period the bin copy is deleted permanently, after re-checking that no row refers to it
+   the Trash with a fresh retention period.
+4. **Purge.** After the retention period the Trash copy is deleted permanently, after re-checking that no row refers to it
    (if one does, it is restored instead).
 
 Safety rails: files written or reused within the last 24 hours are left alone (ingest touches a reused file, so an import
@@ -384,69 +388,84 @@ in a process; every action is written to the audit chain BEFORE it happens (`ori
 `original.purged`, `original.purge-failed`; an action whose record cannot be written is not done), plus an access-log row
 of type Integrity per run and per manual restore; it never runs while the storage settings do not describe hash-named
 filesystem originals. Ownership: the older orphan collector owns id-named files and ignores hash-named files and the
-bin; this collector owns hash-named files and the bin and ignores id-named files.
+Trash; this collector owns hash-named files and the Trash and ignores id-named files.
 
-What verification does with it: a binned or purged original is not a finding for a deleted email (the email's own
+What verification does with it: an original in the Trash or erased for good is not a finding for a deleted email (the email's own
 `email.deleted` entry explains it, and manifest verify is unaffected). It IS a finding when a row still refers to an
-original whose last bin event is `binned` or `purged` (no later restore or new store of the same bytes): chain verify
-reports it and sets `ok` to false, and a per-email check says the original is in the bin and how to restore it. A file
-that is missing with no bin entry and no chain record stays a plain `Missing`.
+original whose last Trash event is `binned` or `purged` (no later restore or new store of the same bytes): chain verify
+reports it and sets `ok` to false, and a per-email check says the original is in the Trash and how to restore it. A file
+that is missing with no Trash entry and no chain record stays a plain `Missing`.
 
 Settings: `RawMessages__OriginalCleanup__Enabled` (true), `__BinRetentionDays` (30), `__IntervalHours` (1, so a deleted
-email's original reaches the bin soon), `__MaxFilesPerRun` (1000), `__StartupDelayMinutes` (15). Admin API (all under
-`/api/v1/integrity/original-cleanup/`): `GET status` (on/applicable, counts in the bin and bytes, earliest purge date,
-totals, last run), `POST run` (one pass now, takes no path), `GET bin` (sha256, binned at, purge date, size; no paths),
+email's original reaches the Trash soon), `__MaxFilesPerRun` (1000), `__StartupDelayMinutes` (15). Admin API (all under
+`/api/v1/integrity/original-cleanup/`): `GET status` (on/applicable, counts in the Trash and bytes, earliest purge date,
+totals, last run), `POST run` (one pass now, takes no path), `GET bin` (the Trash list: sha256, moved at, purge date, size; no paths),
 `POST restore`, `POST erasure-status/{emailId}` (read-only: for one already deleted email, whether its original is still
-shared by other emails, in the bin until when, or gone).
+shared by other emails, in the Trash until when, or gone).
 
-**The honest limit:** while an original is in the bin it can be restored. After the retention period it is gone for good,
-except from a backup. Leaving the bin on (the default) therefore means that deleted emails are really erased after 30
+**The honest limit:** while an original is in the Trash it can be restored. After the retention period it is gone for good,
+except from a backup. Leaving the Trash on (the default) therefore means that deleted emails are really erased after 30
 days, and from then on the archive no longer proves what those emails contained. The audit chain keeps only their hashes.
-The grace period is counted from when the bin moved the file, not from when the email was deleted (a deletion is
+The grace period is counted from when the Trash moved the file, not from when the email was deleted (a deletion is
 noticed within `IntervalHours`).
 
-### The Integrity & Storage page and its settings (2026-11-22, CI green, 1572 tests)
+### The Integrity & Storage page and its settings (2026-11-22, CI green, 1572 tests; wording, one Save and the Trash name added after the first look)
 
 An admin-only page (menu entry "Integrity & Storage", web login, not the API keys) makes the integrity features usable without
 curl, and lets admins change the day-to-day settings in the app instead of only by environment variable.
 
 **What is on the page** (every action is also available through the API; the page calls the same services):
 - *Overview:* last verify-all run with counters and "Run verify-all now" (progress is polled); "Check audit chain" (ok, entries, first
-  break, warnings, binned/restored/purged originals, deleted-with-record, unchained); the chain-head line with a copy button.
+  break, warnings, originals moved to the Trash / restored / erased, deleted-with-record, unchained); the chain-head line with a copy button.
 - *Signed manifests:* list, "Create signed manifest", per-manifest "Verify", downloads of the json, sig and entries file and of
   `public-key.pem` (the download takes only a validated manifest name and a kind; it never takes a path, refuses symbolic links),
   and the exact `openssl dgst` command to copy.
-- *Original bin:* status, the list (short hash, binned at, deleted-for-good date, size), "Restore" per item, "Run now" (confirms first,
-  because it also purges what is past retention).
+- *Trash:* status, the list (short hash, put in the Trash, erased-for-good date, size), "Restore from Trash" per item, "Empty Trash now" (confirms first,
+  because it also deletes what is past retention).
 - *Attachment text / OCR:* counts, engine string, whether the models are present, "Rescan failed" and "Rescan needs-OCR" (confirm first;
   "rescan all" is deliberately not offered).
 - *Settings:* below. A section that fails to load shows its error and the rest of the page still works.
+
+**Look and wording (changed after the first look).** The page uses the app's own theme colours in both themes: normal text, muted text for
+explanations, one accent for the main buttons, a soft neutral badge for "standard value" / "changed by" / "set by the server", and a danger
+edge only for real problems. Nothing is conveyed by colour alone (results start with a tick or a cross and say what happened in a sentence).
+Wording is plain: no internal terms in the main line; the environment variable name sits in a small "Technical name" note, with a remark
+where the name still says "Bin". Results are sentences ("All 14 emails match their originals."). Failed attachment results say why.
 
 **Settings: three kinds.** Precedence is environment variable, then database, then built-in default.
 
 | Group | Settings | Limits |
 |---|---|---|
-| **Locked** (read-only, shown with the variable that sets it) | `Storage:Mode`, `RawMessages:Enabled/Storage/FileSystem:BasePath/FileSystem:HashNamed/Required/MaxMessageSizeMb/IncludeGraph`, `Integrity:AuditChainEnabled/ManifestPath/ManifestKeyPath/AllowNewKey`, `Storage:AllowSerializedImports/AllowHashNamedMigration` | none: no endpoint of the page can change them |
-| **Editable** | `Integrity:VerifyAllIntervalHours`, `Integrity:ManifestIntervalHours` | 0 (off) to 8760 |
+| **Locked for safety** (read-only, shown with the variable that sets it) | `Storage:Mode`, `RawMessages:Enabled/Storage/FileSystem:BasePath/FileSystem:HashNamed/Required/MaxMessageSizeMb/IncludeGraph`, `Integrity:AuditChainEnabled/ManifestPath/ManifestKeyPath/AllowNewKey`, `Storage:AllowSerializedImports/AllowHashNamedMigration` | none: no endpoint of the page can change them |
+| **Editable** ("You can change these here") | `Integrity:VerifyAllIntervalHours`, `Integrity:ManifestIntervalHours` | 0 (off) to 8760 |
 | | `RawMessages:OriginalCleanup:Enabled` | true/false |
 | | `RawMessages:OriginalCleanup:BinRetentionDays` | 7 to 3650 (the environment variable may go lower) |
 | | `RawMessages:OriginalCleanup:IntervalHours` / `MaxFilesPerRun` | 1 to 168 / 1 to 100000 |
 | | `Ocr:Mode` | off, cpu, gpu |
 | | `Ocr:Threads` / `MaxPages` / `MaxImagePixels` / `TimeoutSecondsPerImage` | 1-16 / 1-200 / 100000-200000000 / 1-600 |
-| **Pinned** (an editable one that the host sets with an environment variable) | any editable key with its variable set | the page shows it locked: "set by environment variable X"; a stored value is ignored |
+| **Set by the server** (an editable one that the host sets with an environment variable; also called pinned) | any editable key with its variable set | the page shows it locked: "set by environment variable X"; a stored value is ignored |
 
 A value from `appsettings.json` does not pin; only environment variables and command-line arguments do.
 
-**Rules of a change.** Server-side validation against the limits; locked and pinned keys are refused; the chain entry
-`setting.changed` (key, old, new, actor, whether it was risky, whether it was a reset) and an access-log row of type Integrity are
-written BEFORE the change is saved, and when either cannot be written the change is not applied (a failure after the chain entry is
-recorded as `setting.change.failed`). If the audit chain is switched off by the locked setting, the access-log row alone is
-required. Each editable setting has "Reset to default". **Risky changes need the admin's own password:** shortening the bin
-retention, switching the bin off, any change of the OCR mode, and switching a schedule off (a longer or shorter interval is not
-risky). A reset that would shorten the retention is risky too. An account without a local password (single sign-on) cannot confirm
-and is told to set the environment variable on the host instead. Wrong passwords are limited: 5 in 15 minutes per admin.
+**One Save, all or nothing.** All editable settings are ONE form with ONE Save button (also in a bar at the top that shows "N unsaved
+changes" with Save and Discard when something was edited). Only the changed rows are sent. The server validates ALL changed values first: if
+any is bad (or locked, or set by the server) NOTHING is applied and the page is shown again with what was typed and a plain message on each bad
+row. If all are valid, one chain entry `setting.changed` per changed setting (key, old, new, actor, risky, reset, a batch id and "n of m") and an
+access-log row of type Integrity are written BEFORE anything is saved; when any record cannot be written nothing is applied (the failed attempt is
+recorded as `setting.change.failed`). The values are then written in one database transaction. If that transaction fails, none of them is applied
+and `setting.change.failed` says so. "Go back to the standard value" only marks the row ("will go back to the standard value when you save")
+until Save.
 
-**Live or restart.** The schedules, the bin settings, `Ocr:Mode`, `MaxPages`, `MaxImagePixels` and `TimeoutSecondsPerImage` apply
+**Risky changes and the dialog.** Risky: shortening the Trash retention, switching the Trash off, any change of the OCR mode, and switching a
+schedule off (making an interval longer or shorter is not risky); a reset that would do any of those is risky too. There is no password box on a row.
+When you press Save and any pending change is risky, a dialog lists exactly what will change (setting, old value, new value) with ONE password field and
+Confirm / Cancel. With nothing risky, Save applies straight away with no dialog. The dialog is only presentation: the form POST must carry the password
+and the server refuses a risky change without a correct one (nothing of that save is applied; the page opens the dialog again with the message). Wrong
+passwords are limited: 5 in 15 minutes per admin. An account without a local password (single sign-on) is told in the dialog why the risky change
+cannot be made here and that the environment variable on the host must be used; the risky change is not applied, the safe changes of the same save still
+are, and the message after saving says which was which.
+
+**Live or restart.** The schedules, the Trash settings, `Ocr:Mode`, `MaxPages`, `MaxImagePixels` and `TimeoutSecondsPerImage` apply
 within about 30 seconds without a restart (the background services read an options monitor on every tick or item). `Ocr:Threads`
 applies after a restart (the OCR engine builds its session once); the page says so next to the field. A stored value that is invalid,
 or that is below the page's floor, is ignored and logged; a failure to read the settings table at start-up never stops the app.
@@ -454,8 +473,8 @@ or that is below the page's floor, is ignored and logged; a failure to read the 
 **Honest limits.** (1) An admin web session can change the editable settings; the
 protection is the limits, the password for risky changes, the audit entry for every change, and the locked group, not secrecy.
 (2) The password check protects against a hijacked browser session, not against someone who has the host: they can set environment
-variables. (3) The record is written before the change but cannot be in the same database transaction (the chain writer has its own),
-so a crash between the two leaves a record of a change that did not happen; the verifier and the access log make that visible.
+variables. (3) The records are written before the changes but cannot be in the same database transaction (the chain writer has its own),
+so a crash between the two leaves records of changes that did not happen; `setting.change.failed`, the verifier and the access log make that visible.
 (4) The page was built and tested through the build and test pipeline; the page itself has not been opened in a browser by the builder.
 
 ## Phase 1: make the original mandatory, prove it
