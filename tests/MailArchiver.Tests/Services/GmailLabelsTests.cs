@@ -135,7 +135,7 @@ public class GmailLabelsTests : IAsyncLifetime
 
             ctx.ChangeTracker.Clear();
             var e = await ctx.ArchivedEmails.SingleAsync(x => x.MailAccountId == a.Id);
-            Assert.Equal(new[] { "\\Sent", "Work/Projects" }, e.Labels!.OrderBy(l => l, StringComparer.Ordinal).ToArray());
+            Assert.Equal(new[] { "Work/Projects", "\\Sent" }, e.Labels!.OrderBy(l => l, StringComparer.Ordinal).ToArray());
             Assert.Equal("111", e.GmailMessageId);
             Assert.Equal("t111", e.GmailThreadId);
             Assert.NotNull(e.LabelsCapturedAt);
