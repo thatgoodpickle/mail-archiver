@@ -2066,59 +2066,19 @@ namespace MailArchiver.Services.Core
                 // the untruncated variants and the attachment bytes stay out of the database. Any
                 // failure (or a synthesized calendar attachment, which is not a part of the original)
                 // keeps the upstream behaviour: the email is stored in full.
-                LeanIngestPlan? leanPlan = null;
-                if (_storageMode.IsLean && _leanIngest != null && rawMessage != null)
+                // The decision and the lean row shape are shared with the import and Graph paths (LeanArchive).
+                var leanDecision = await LeanArchive.DecideAsync(_storageMode, _leanIngest, _rawMessageOptions, rawMessage,
+                    emailAttachments, calendarExtraction != null, rederiveInto: null, _logger, subject);
+                if (leanDecision.RefusalReason != null)
                 {
-                    if (calendarExtraction != null)
-                    {
-                        _logger.LogWarning("Lean ingest skipped for '{Subject}': it carries a synthesized calendar attachment; stored in full", subject);
-                    }
-                    else
-                    {
-                        leanPlan = await _leanIngest.TryPrepareAsync(rawMessage, emailAttachments.Select(a => a.Content).ToList());
-                    }
+                    RawMessageRequirement.LogRefused(_logger, subject, leanDecision.RefusalReason, _metricsRecorder);
+                    return false;
                 }
 
-                // RawMessages:Required: no verified original, no archive entry. Lean ingest that could
-                // not verify (leanPlan null) counts as "no original" here; the upstream full-storage
-                // fallback would only keep the parsed copy.
-                {
-                    var refusal = RawMessageRequirement.RefusalReason(_rawMessageOptions, rawMessage);
-                    if (refusal == null && _rawMessageOptions.Required && _storageMode.IsLean && leanPlan == null)
-                        refusal = MetricsReasons.Failed;
-                    if (refusal != null)
-                    {
-                        RawMessageRequirement.LogRefused(_logger, subject, refusal, _metricsRecorder);
-                        return false;
-                    }
-                }
-
+                var leanPlan = leanDecision.Plan;
                 if (leanPlan != null)
                 {
-                    var leanAttachments = new List<EmailAttachment>(emailAttachments.Count);
-                    for (var i = 0; i < emailAttachments.Count; i++)
-                    {
-                        var source = emailAttachments[i];
-                        // No Content set: the dedup interceptor skips attachments without bytes.
-                        leanAttachments.Add(new EmailAttachment
-                        {
-                            FileName = source.FileName,
-                            ContentType = source.ContentType,
-                            ContentId = source.ContentId,
-                            Size = source.Size,
-                            PartPath = leanPlan.Attachments[i].PartPath,
-                            Sha256 = leanPlan.Attachments[i].Sha256
-                        });
-                    }
-
-                    archivedEmail.Attachments = leanAttachments;
-                    archivedEmail.HtmlBody = string.Empty;
-                    archivedEmail.BodyUntruncatedText = null;
-                    archivedEmail.BodyUntruncatedHtml = null;
-                    archivedEmail.OriginalBodyText = null;
-                    archivedEmail.OriginalBodyHtml = null;
-                    archivedEmail.ContentStripped = true;
-                    archivedEmail.RawMessage = leanPlan.Row; // inserted together with the email
+                    LeanArchive.Apply(archivedEmail, emailAttachments, leanPlan);
                 }
 
                 try

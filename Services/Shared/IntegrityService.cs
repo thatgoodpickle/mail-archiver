@@ -44,7 +44,7 @@ namespace MailArchiver.Services.Shared
     public sealed class IntegrityService : IIntegrityService
     {
         // Bodies longer than this are not compared: ingest truncates them, so equality would be unreliable.
-        private const int MaxComparedBodyBytes = 100_000;
+        public const int MaxComparedBodyBytes = 100_000;
 
         private readonly MailArchiverDbContext _context;
         private readonly IRawMessageStore _store;
@@ -128,23 +128,15 @@ namespace MailArchiver.Services.Shared
         private static void CompareFields(string subject, string from, string to, string cc, string bcc, string body,
             MimeMessage message, List<string> findings)
         {
-            // Same derivation as EmailCoreService.ArchiveEmailAsync.
-            var expectedSubject = MailContentHelper.TruncateFieldForTsvector(
-                MailContentHelper.CleanText(message.Subject ?? "(No Subject)"), 50_000);
-            var fromAddress = message.From?.FirstOrDefault() as MailboxAddress;
-            var expectedFrom = MailContentHelper.TruncateFieldForTsvector(
-                MailContentHelper.CleanText(fromAddress?.Address ?? string.Empty), 10_000);
+            // Same derivation as EmailCoreService.ArchiveEmailAsync (shared in LeanIndexFields, which the
+            // import and Graph lean paths also use to fill the index fields from the original).
+            var expected = LeanIndexFields.Derive(message);
 
-            static string Join(InternetAddressList? list) => MailContentHelper.TruncateFieldForTsvector(
-                MailContentHelper.CleanText(string.Join(", ",
-                    list?.Select(m => m as MailboxAddress).Where(m => m != null).Select(m => m!.Address) ?? Enumerable.Empty<string>())),
-                50_000);
-
-            if (!string.Equals(subject, expectedSubject, StringComparison.Ordinal)) findings.Add("Subject differs from the original.");
-            if (!string.Equals(from, expectedFrom, StringComparison.Ordinal)) findings.Add("Sender differs from the original.");
-            if (!string.Equals(to, Join(message.To), StringComparison.Ordinal)) findings.Add("Recipients (To) differ from the original.");
-            if (!string.Equals(cc, Join(message.Cc), StringComparison.Ordinal)) findings.Add("Recipients (Cc) differ from the original.");
-            if (!string.Equals(bcc, Join(message.Bcc), StringComparison.Ordinal)) findings.Add("Recipients (Bcc) differ from the original.");
+            if (!string.Equals(subject, expected.Subject, StringComparison.Ordinal)) findings.Add("Subject differs from the original.");
+            if (!string.Equals(from, expected.From, StringComparison.Ordinal)) findings.Add("Sender differs from the original.");
+            if (!string.Equals(to, expected.To, StringComparison.Ordinal)) findings.Add("Recipients (To) differ from the original.");
+            if (!string.Equals(cc, expected.Cc, StringComparison.Ordinal)) findings.Add("Recipients (Cc) differ from the original.");
+            if (!string.Equals(bcc, expected.Bcc, StringComparison.Ordinal)) findings.Add("Recipients (Bcc) differ from the original.");
 
             var (text, _) = LeanBodyExtractor.Extract(message);
             if (!string.IsNullOrEmpty(text) && Encoding.UTF8.GetByteCount(text) < MaxComparedBodyBytes)

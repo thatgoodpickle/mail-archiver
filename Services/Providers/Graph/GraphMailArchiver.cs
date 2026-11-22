@@ -23,6 +23,8 @@ namespace MailArchiver.Services.Providers.Graph
         private readonly IRawMessageStore _rawMessageStore;
         private readonly RawMessageOptions _rawMessageOptions;
         private readonly IMetricsRecorder? _metricsRecorder;
+        private readonly StorageModeOptions _storageMode;
+        private readonly ILeanIngest? _leanIngest;
 
         public GraphMailArchiver(
             MailArchiverDbContext context,
@@ -30,8 +32,12 @@ namespace MailArchiver.Services.Providers.Graph
             DateTimeHelper dateTimeHelper,
             IRawMessageStore rawMessageStore,
             IOptions<RawMessageOptions>? rawMessageOptions = null,
-            IMetricsRecorder? metricsRecorder = null)
+            IMetricsRecorder? metricsRecorder = null,
+            IOptions<StorageModeOptions>? storageMode = null,
+            ILeanIngest? leanIngest = null)
         {
+            _storageMode = storageMode?.Value ?? new StorageModeOptions();
+            _leanIngest = leanIngest;
             _context = context;
             _logger = logger;
             _dateTimeHelper = dateTimeHelper;
@@ -76,23 +82,37 @@ namespace MailArchiver.Services.Providers.Graph
             {
                 _logger.LogDebug("Archiving new email {MessageId} for account {AccountName}", messageId, account.Name);
 
-                var (archivedEmail, rawCapture) = await BuildArchivedEmailAsync(graphClient, account, message, messageId, isOutgoing, folderName);
+                var (archivedEmail, rawCapture, synthesizedBody) = await BuildArchivedEmailAsync(graphClient, account, message, messageId, isOutgoing, folderName);
 
-                // RawMessages:Required: refuse before anything is saved.
-                var refusal = RawMessageRequirement.RefusalReason(_rawMessageOptions, rawCapture);
-                if (refusal != null)
+                // Lean storage (Storage:Mode=Lean) and RawMessages:Required, decided like the IMAP path
+                // (LeanArchive). The parsed copy here comes from the Graph JSON and the Graph attachment API,
+                // so the index fields are re-derived from the verified original (the MIME message Graph
+                // returns), and an attachment that cannot be found again in it means "store in full".
+                // A body synthesized from an .ics attachment is not part of the original: stored in full.
+                var sourceAttachments = (archivedEmail.Attachments ?? new List<EmailAttachment>()).ToList();
+                var leanDecision = await LeanArchive.DecideAsync(_storageMode, _leanIngest, _rawMessageOptions, rawCapture,
+                    sourceAttachments, synthesizedBody, rederiveInto: archivedEmail, _logger, archivedEmail.Subject);
+                if (leanDecision.RefusalReason != null)
                 {
-                    RawMessageRequirement.LogRefused(_logger, archivedEmail.Subject, refusal, _metricsRecorder);
+                    RawMessageRequirement.LogRefused(_logger, archivedEmail.Subject, leanDecision.RefusalReason, _metricsRecorder);
                     return false;
                 }
+
+                var leanPlan = leanDecision.Plan;
+                if (leanPlan != null) LeanArchive.Apply(archivedEmail, sourceAttachments, leanPlan);
 
                 _context.ArchivedEmails.Add(archivedEmail);
                 await _context.SaveChangesAsync();
 
                 // The id exists now, so a filesystem-backed original can be written and its
-                // metadata row added.
-                var storedRaw = _rawMessageStore.CreateRow(archivedEmail.Id, rawCapture);
-                if (storedRaw != null)
+                // metadata row added (a lean email already carries its verified original row).
+                var storedRaw = leanPlan != null ? null : _rawMessageStore.CreateRow(archivedEmail.Id, rawCapture);
+                if (leanPlan != null)
+                {
+                    _logger.LogInformation("Archived lean: '{Subject}' ({Count} attachments kept only in the original {Path})",
+                        archivedEmail.Subject, archivedEmail.Attachments.Count, leanPlan.Row.StoragePath);
+                }
+                else if (storedRaw != null)
                 {
                     archivedEmail.RawMessage = storedRaw;
                     try
@@ -260,7 +280,7 @@ namespace MailArchiver.Services.Providers.Graph
         /// <summary>
         /// Builds an ArchivedEmail entity from a Graph message, including attachments
         /// </summary>
-        private async Task<(ArchivedEmail Email, RawMessageCapture? RawCapture)> BuildArchivedEmailAsync(
+        private async Task<(ArchivedEmail Email, RawMessageCapture? RawCapture, bool SynthesizedBody)> BuildArchivedEmailAsync(
             GraphServiceClient graphClient,
             MailAccount account,
             Message message,
@@ -269,6 +289,7 @@ namespace MailArchiver.Services.Providers.Graph
             string folderName)
         {
             RawMessageCapture? rawCapture = null;
+            var synthesizedBody = false;
 
             var convertedSentDate = message.SentDateTime.HasValue
                 ? _dateTimeHelper.ConvertToDisplayTimeZone(message.SentDateTime.Value)
@@ -412,6 +433,7 @@ namespace MailArchiver.Services.Providers.Graph
                         {
                             archivedEmail.Body = summary;
                             archivedEmail.OriginalBodyText = Encoding.UTF8.GetBytes(summary);
+                            synthesizedBody = true;
                         }
                     }
                     catch (Exception ex)
@@ -421,7 +443,7 @@ namespace MailArchiver.Services.Providers.Graph
                 }
             }
 
-            return (archivedEmail, rawCapture);
+            return (archivedEmail, rawCapture, synthesizedBody);
         }
 
         /// <summary>

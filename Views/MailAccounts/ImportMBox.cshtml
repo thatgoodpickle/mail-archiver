@@ -12,6 +12,13 @@
         </a>
     </div>
 
+    @if (ViewBag.MboxRefusal is string mboxRefusal)
+    {
+        <div class="alert alert-danger" role="alert">
+            <i class="bi bi-shield-exclamation me-1"></i> @mboxRefusal
+        </div>
+    }
+
     <div class="msa-info-banner mb-3">
         <div class="d-flex align-items-start">
             <i class="bi bi-info-circle-fill me-2 mt-1"></i>

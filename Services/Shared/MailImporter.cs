@@ -16,11 +16,17 @@ namespace MailArchiver.Services.Shared
         private readonly EmlAttachmentCollector _attachmentCollector;
         private readonly RawMessageOptions _rawMessageOptions;
         private readonly IRawMessageStore _rawMessageStore;
+        private readonly ILeanIngest? _leanIngest;
+        private readonly StorageModeOptions _storageMode;
 
         public MailImporter(IServiceProvider serviceProvider, ILogger<MailImporter> logger,
             EmlAttachmentCollector attachmentCollector, IRawMessageStore rawMessageStore,
-            IOptions<RawMessageOptions>? rawMessageOptions = null)
+            IOptions<RawMessageOptions>? rawMessageOptions = null,
+            IOptions<StorageModeOptions>? storageMode = null,
+            ILeanIngest? leanIngest = null)
         {
+            _leanIngest = leanIngest;
+            _storageMode = storageMode?.Value ?? new StorageModeOptions();
             _serviceProvider = serviceProvider;
             _logger = logger;
             _attachmentCollector = attachmentCollector;
@@ -240,18 +246,33 @@ namespace MailArchiver.Services.Shared
                     archivedEmail.HasAttachments = true;
                 }
 
-                // RawMessages:Required: an import without a keepable original is refused.
-                var refusal = RawMessageRequirement.RefusalReason(_rawMessageOptions, rawMessage);
-                if (refusal != null)
+                // Lean storage (Storage:Mode=Lean) and RawMessages:Required, decided like the IMAP path
+                // (LeanArchive). The index fields are re-derived from the verified original because this
+                // import's parsed copy may have been header-recovered or cleaned before it got here.
+                var sourceAttachments = archivedEmail.Attachments.ToList();
+                var leanDecision = await LeanArchive.DecideAsync(_storageMode, _leanIngest, _rawMessageOptions, rawMessage,
+                    sourceAttachments, calendarExtraction != null, rederiveInto: archivedEmail, _logger, message.Subject);
+                if (leanDecision.RefusalReason != null)
                 {
-                    RawMessageRequirement.LogRefused(_logger, message.Subject, refusal, null);
-                    return ImportResult.CreateFailed($"RawMessages:Required is set and no original could be kept ({refusal}).");
+                    RawMessageRequirement.LogRefused(_logger, message.Subject, leanDecision.RefusalReason, null);
+                    return ImportResult.CreateFailed($"RawMessages:Required is set and no original could be kept ({leanDecision.RefusalReason}).");
                 }
 
+                var leanPlan = leanDecision.Plan;
+                if (leanPlan != null) LeanArchive.Apply(archivedEmail, sourceAttachments, leanPlan);
+
                 // The row goes in first: the filesystem backend keys its file by the email id,
-                // which the database assigns. A Postgres-backed row carries its bytes along.
+                // which the database assigns. A Postgres-backed row carries its bytes along (and a lean
+                // email already carries its verified original row).
                 context.ArchivedEmails.Add(archivedEmail);
                 await context.SaveChangesAsync();
+
+                if (leanPlan != null)
+                {
+                    _logger.LogInformation("Job {JobId}: imported lean: '{Subject}' ({Count} attachments kept only in the original {Path})",
+                        jobId, archivedEmail.Subject, archivedEmail.Attachments.Count, leanPlan.Row.StoragePath);
+                    return ImportResult.CreateSuccess();
+                }
 
                 var storedRaw = _rawMessageStore.CreateRow(archivedEmail.Id, rawMessage);
                 if (storedRaw != null)

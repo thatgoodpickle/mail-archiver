@@ -222,6 +222,16 @@ private readonly IServiceProvider _serviceProvider;
                 _logger.LogInformation("Starting MBox import job {JobId} for {FileName}", job.JobId, job.FileName);
 
                 using var scope = _serviceProvider.CreateScope();
+
+                // Fork: refuse before reading a single message (web upload, queue and command line all end here).
+                var refusal = scope.ServiceProvider.GetService<IOptions<StorageModeOptions>>()?.Value
+                    .MboxImportRefusal(scope.ServiceProvider.GetService<IOptions<RawMessageOptions>>()?.Value ?? new RawMessageOptions());
+                if (refusal != null)
+                {
+                    if (!job.KeepSourceFile) TryDeleteFile(job.FilePath);
+                    throw new InvalidOperationException(refusal);
+                }
+
                 var context = scope.ServiceProvider.GetRequiredService<MailArchiverDbContext>();
                 var targetAccount = await context.MailAccounts.FindAsync(job.TargetAccountId);
                 if (targetAccount == null)

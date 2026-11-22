@@ -1971,9 +1971,19 @@ namespace MailArchiver.Controllers
             }
         }
 
+        // Fork: mbox holds re-serialized copies, so it is refused when lean storage or RawMessages:Required is on
+        // (unless Storage:AllowSerializedImports). Null when the import may go ahead.
+        private string? MboxImportRefusal()
+        {
+            var storage = HttpContext.RequestServices.GetService<IOptions<StorageModeOptions>>()?.Value ?? new StorageModeOptions();
+            var raw = HttpContext.RequestServices.GetService<IOptions<RawMessageOptions>>()?.Value ?? new RawMessageOptions();
+            return storage.MboxImportRefusal(raw);
+        }
+
         // GET: MailAccounts/ImportMBox
         public async Task<IActionResult> ImportMBox()
         {
+            ViewBag.MboxRefusal = MboxImportRefusal();
             // Use the authentication service to get user info properly
             var authService = HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>();
             var currentUsername = authService.GetCurrentUserDisplayName(HttpContext);
@@ -2026,6 +2036,9 @@ namespace MailArchiver.Controllers
         [RequestFormLimits(MultipartBodyLengthLimit = long.MaxValue)]
         public async Task<IActionResult> ImportMBox(MBoxImportViewModel model)
         {
+            var mboxRefusal = MboxImportRefusal();
+            ViewBag.MboxRefusal = mboxRefusal;
+
             // Reload accounts for validation failure
             var accounts = await _context.MailAccounts
                 .Where(a => a.IsEnabled)
@@ -2041,6 +2054,12 @@ namespace MailArchiver.Controllers
 
             // Ensure MaxFileSize is set for validation failures
             model.MaxFileSize = _uploadOptions.MaxFileSizeBytes;
+
+            if (mboxRefusal != null)
+            {
+                ModelState.AddModelError("", mboxRefusal);
+                return View(model);
+            }
 
             if (!ModelState.IsValid)
             {
