@@ -158,6 +158,7 @@ public class OriginalBinTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddScoped(_ => NewContext());
         services.AddSingleton(Paths());
+        services.AddScoped<IArchiveIdentityService, ArchiveIdentityService>();
         var integrity = Opt.Create(new IntegrityOptions { AuditChainEnabled = chainOn });
         services.AddSingleton<IAuditChain>(sp => chainOverride ?? new AuditChain(sp.GetRequiredService<IServiceScopeFactory>(), integrity, NullLogger<AuditChain>.Instance));
         var lifetime = new Mock<IHostApplicationLifetime>();
