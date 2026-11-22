@@ -18,6 +18,8 @@ services:
       ConnectionStrings__DefaultConnection: "Host=postgres;Database=MailArchiver;Username=mailuser;Password=${DB_PASSWORD:?set DB_PASSWORD}"
       Authentication__Username: admin
       Authentication__Password: "${ADMIN_PASSWORD:?set ADMIN_PASSWORD}"
+      # The REST API (and the API Keys page) is off by default; the integrity endpoints need it.
+      Api__Enabled: "true"
       # Lean storage: the app refuses to start unless ALL of these are set as shown.
       Storage__Mode: Lean
       RawMessages__Enabled: "true"
