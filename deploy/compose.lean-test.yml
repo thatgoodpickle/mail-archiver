@@ -32,6 +32,10 @@ services:
       - ./logs:/app/logs
       - ./keys:/app/DataProtection-Keys
       - ./manifests:/app/Manifests         # signed manifests and the signing key: must survive a container recreate
+    # The image's built-in health check calls an endpoint that needs an API key
+    # (MAILARCHIVER_HEALTH_API_KEY), which this test stack does not set, so it would show "unhealthy".
+    healthcheck:
+      disable: true
     depends_on:
       postgres:
         condition: service_healthy
