@@ -477,7 +477,9 @@ namespace MailArchiver.Services.Core
                             EF.Functions.ILike(e.To, $"%{escapedWord}%") ||
                             EF.Functions.ILike(e.Body, $"%{escapedWord}%") ||
                             EF.Functions.ILike(e.Cc, $"%{escapedWord}%") ||
-                            EF.Functions.ILike(e.Bcc, $"%{escapedWord}%")
+                            EF.Functions.ILike(e.Bcc, $"%{escapedWord}%") ||
+                            // Fork: attachment text (see AttachmentTextProcessor)
+                            (e.AttachmentText != null && EF.Functions.ILike(e.AttachmentText, $"%{escapedWord}%"))
                         );
                     }
                 }
@@ -490,7 +492,9 @@ namespace MailArchiver.Services.Core
                         (e.To != null && e.To.ToLower().Contains(phrase.ToLower())) ||
                         (e.Body != null && e.Body.ToLower().Contains(phrase.ToLower())) ||
                         (e.Cc != null && e.Cc.ToLower().Contains(phrase.ToLower())) ||
-                        (e.Bcc != null && e.Bcc.ToLower().Contains(phrase.ToLower()))
+                        (e.Bcc != null && e.Bcc.ToLower().Contains(phrase.ToLower())) ||
+                        // Fork: attachment text (see AttachmentTextProcessor)
+                        (e.AttachmentText != null && e.AttachmentText.ToLower().Contains(phrase.ToLower()))
                     );
                 }
 

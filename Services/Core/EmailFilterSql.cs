@@ -45,6 +45,9 @@ namespace MailArchiver.Services.Core
                 var (tsQuery, phrases, fieldSearches, fieldPhrases) = ParseSearchTermForTsQuery(searchTerm);
                 var searchConditions = new List<string>();
 
+                // Fork: the search vector also covers AttachmentText (text read out of attachments). The GIN
+                // index idx_archivedemails_fulltext_search_v2 (migration AddAttachmentText) repeats this exact
+                // expression, so keep the two in step.
                 if (!string.IsNullOrEmpty(tsQuery))
                 {
                     searchConditions.Add($@"
@@ -54,7 +57,8 @@ namespace MailArchiver.Services.Core
                             COALESCE(""From"", '') || ' ' || 
                             COALESCE(""To"", '') || ' ' || 
                             COALESCE(""Cc"", '') || ' ' || 
-                            COALESCE(""Bcc"", '')) 
+                            COALESCE(""Bcc"", '') || ' ' || 
+                            COALESCE(""AttachmentText"", '')) 
                         @@ to_tsquery('simple', @param{paramCounter})");
                     parameters.Add(new Npgsql.NpgsqlParameter($"@param{paramCounter}", tsQuery));
                     paramCounter++;
@@ -72,7 +76,8 @@ namespace MailArchiver.Services.Core
                             COALESCE(""From"", '') || ' ' || 
                             COALESCE(""To"", '') || ' ' || 
                             COALESCE(""Cc"", '') || ' ' || 
-                            COALESCE(""Bcc"", '')) 
+                            COALESCE(""Bcc"", '') || ' ' || 
+                            COALESCE(""AttachmentText"", '')) 
                         @@ to_tsquery('simple', @param{paramCounter})
                         AND (
                         POSITION(LOWER(@param{paramCounter + 1}) IN LOWER(COALESCE(""Subject"", ''))) > 0 OR
@@ -80,7 +85,8 @@ namespace MailArchiver.Services.Core
                         POSITION(LOWER(@param{paramCounter + 1}) IN LOWER(COALESCE(""From"", ''))) > 0 OR
                         POSITION(LOWER(@param{paramCounter + 1}) IN LOWER(COALESCE(""To"", ''))) > 0 OR
                         POSITION(LOWER(@param{paramCounter + 1}) IN LOWER(COALESCE(""Cc"", ''))) > 0 OR
-                        POSITION(LOWER(@param{paramCounter + 1}) IN LOWER(COALESCE(""Bcc"", ''))) > 0
+                        POSITION(LOWER(@param{paramCounter + 1}) IN LOWER(COALESCE(""Bcc"", ''))) > 0 OR
+                        POSITION(LOWER(@param{paramCounter + 1}) IN LOWER(COALESCE(""AttachmentText"", ''))) > 0
                     ))");
                         parameters.Add(new Npgsql.NpgsqlParameter($"@param{paramCounter}", phraseTsQuery));
                         paramCounter++;
@@ -95,7 +101,8 @@ namespace MailArchiver.Services.Core
                         POSITION(LOWER(@param{paramCounter}) IN LOWER(COALESCE(""From"", ''))) > 0 OR
                         POSITION(LOWER(@param{paramCounter}) IN LOWER(COALESCE(""To"", ''))) > 0 OR
                         POSITION(LOWER(@param{paramCounter}) IN LOWER(COALESCE(""Cc"", ''))) > 0 OR
-                        POSITION(LOWER(@param{paramCounter}) IN LOWER(COALESCE(""Bcc"", ''))) > 0
+                        POSITION(LOWER(@param{paramCounter}) IN LOWER(COALESCE(""Bcc"", ''))) > 0 OR
+                        POSITION(LOWER(@param{paramCounter}) IN LOWER(COALESCE(""AttachmentText"", ''))) > 0
                     )");
                         parameters.Add(new Npgsql.NpgsqlParameter($"@param{paramCounter}", phrase));
                         paramCounter++;
