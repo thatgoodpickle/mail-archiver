@@ -196,6 +196,65 @@ is found by search. No OCR engine yet (step B).
   `EmailAttachments.Sha256` would help on millions of rows); legacy inline attachments without a hash are skipped;
   step B (engine, sample scans, CPU/GPU choice) is not started.
 
+### OCR step B: the CPU OCR engine (2026-11-22, CI green, 1412 tests)
+
+**Decision (by measurement, not assumption).** PP-OCRv5 *mobile* detector + the PP-OCRv5 *Latin* recogniser, run
+through ONNX Runtime on the CPU, with our own C# pre/post-processing (DB box extraction, CTC decode). Official models,
+Apache-2.0, pinned by Hugging Face commit and SHA-256 (`tools/fetch-ocr-models.sh`): det 4.8 MB
+(`PaddlePaddle/PP-OCRv5_mobile_det_onnx`), rec 8.0 MB (`PaddlePaddle/latin_PP-OCRv5_mobile_rec_onnx`), plus the 836-character
+dictionary taken from the recogniser's own `inference.yml` (`OcrData/`). Pipeline settings come from the models'
+`inference.yml` and were confirmed against RapidOCR's defaults and a set of variants (larger long side, lower box threshold,
+inverting dark images: none helped, so there is no pre-processing): detector long side capped at 960 px (never enlarged),
+sides rounded to 32, BGR, ImageNet mean/std, threshold 0.3, box threshold 0.6, unclip 1.5; recogniser height 48,
+(x/255-0.5)/0.5, greedy CTC, 838 classes (blank, 836 characters, space).
+
+| Spike candidate (reference pipeline) | synthetic: CER / WER / numbers / words | real screenshots: words |
+|---|---|---|
+| Tesseract 5.5 (eng) | 7.3% / 12.0% / 56 of 59 / 95.8% | 92.5% |
+| RapidOCR defaults, v5 det + latin rec | n/a | 87.4% |
+| v3 English / v3 Latin recognisers | 19.1-19.4% CER on all 12 cases | 96.5% / 97.0% |
+| v5 *server* det (88 MB) + latin rec | 59 of 59 / 86.7% on all 12 | 95.5%, 6.2 s per image, 2.1 GB |
+| **v5 mobile det + latin rec (chosen)** | **4.0% / 5.1% / 59 of 59 / 99.7%** | **99.5%**, 0.17-0.44 s per image |
+
+(Image-only runs; the scan PDF case is excluded because image-only engines cannot read a PDF. An earlier table counted its 23
+numbers as misses for every engine, which is why "numbers" looked low everywhere: 56 of 82 for Tesseract was really 56 of 59.)
+Real screenshots, per image (word recall / character error, hand-written truth for four): capabilities 100% / 7.5%,
+Proxmox 100% / 4.2%, dark integrations page 94.7% / 4.8% (Tesseract: 42.1% / 55.2%), BookStack permissions 100% / 37.9% (the
+character error is column order; the words are all there). The C# port reads all six committed synthetic test images with
+100% word recall in CI (0.3-1.4 s each on a shared 2-core runner). Parity on the user's real screenshots was measured with
+the Python reference (`tools/ocr-reference.py`, same settings): they cannot go to CI because the fork is public.
+
+**Integration route.** `Microsoft.ML.OnnxRuntime` 1.32.0 (MIT) + `SkiaSharp` 4.156.2 (MIT, decode only; the resize, crop and
+rotation are our own code so they are testable). No wrapper NuGet was needed: the post-processing is about 150 lines.
+ImageSharp was not used (split licence). Everything behind `IOcrEngine`; `OnnxOcrEngine` loads nothing until the first image,
+so the application starts and `Ocr__Mode=off` works with the models absent (tested).
+
+**Behaviour.** Items that step A marks NeedsOcr (images; PDFs with under 20 characters of text layer) are read when
+`Ocr__Mode` is `cpu` (or `gpu`, which logs that no GPU image variant exists and uses the CPU) and the models are present.
+Scanned PDFs: the embedded page pictures are extracted with PdfPig (JPEG as is, others through PdfPig's PNG conversion;
+pictures under 100 px skipped, 4 per page, `Ocr__MaxPages` pages); a page whose picture cannot be extracted (fax/JBIG2/JPEG 2000
+formats) is reported and, if nothing at all was read, the attachment is Failed with that reason. A picture with no
+recognisable text is Done with empty text (read, nothing there). Results are stored with method `ocr`, engine
+`paddleocr-ppocrv5-onnx/1 det:<hash8> rec-latin:<hash8>` so a better engine can replace them. At worker start, existing NeedsOcr
+results are queued again automatically when the engine is available; `POST /api/v1/attachment-text/rescan?scope=needsocr`
+does the same on demand. `GET .../status` shows `ocrEngine` and `ocrUnavailable`.
+
+**Limits and untrusted input.** Pixel count is read from the image header and checked BEFORE decoding (`Ocr__MaxImagePixels`,
+default 25 million); one image at a time; per-image time limit (`Ocr__TimeoutSecondsPerImage`, default 30; the ONNX run is
+terminated on cancellation); at most 400 lines per image; `Ocr__Threads` default 2; ORT memory arena and pattern cache off so
+memory is returned after each image. Corrupt, oversized or unsupported images (for example TIFF, which SkiaSharp cannot decode)
+become Failed with a short reason, never a crash. The OCR text is only ever indexed.
+Settings: `Ocr__Mode`, `Ocr__Provider` (auto|cpu; cuda/rocm/openvino log that they are not built yet), `Ocr__Threads`,
+`Ocr__ModelDirectory` (default `<app>/ocr-models`), `Ocr__MaxImagePixels`, `Ocr__TimeoutSecondsPerImage`, `Ocr__MaxPages`.
+
+**Image.** The Dockerfile downloads the models with the pinned script (build arg `OCR_MODELS=skip` builds without them) and keeps
+only the target platform's native libraries. Compressed image 135.0 MB before, 165.4 MB after (+30.4 MB).
+
+**Risks / open points.** TIFF and bilevel-fax PDF scans are not read yet (Failed with a reason); handwriting and very poor
+photos are untested on real material; the GPU variants (CUDA, ROCm, OpenVINO) are not built; vertical text is not handled
+beyond the 90-degree turn of tall crops; the C# engine itself has not been run on the user's real screenshots (parity argument
+above); search remains whole-word/prefix, so OCR misreads of a word make it unfindable.
+
 ## Phase 1: make the original mandatory, prove it
 
 1. `RawMessages:Required` (default false, so upstream behaviour is unchanged): when true,
