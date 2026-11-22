@@ -344,7 +344,7 @@ namespace MailArchiver.Services.Shared
         private static readonly ConcurrentDictionary<string, (int Failures, DateTime Since)> IpFailures = new();
 
         /// <summary>Forgets the password-failure counters (tests).</summary>
-        internal static void ResetThrottle() => Failures.Clear();
+        internal static void ResetThrottle() { Failures.Clear(); IpFailures.Clear(); }
 
         private readonly MailArchiverDbContext _db;
         private readonly ISettingsSnapshot _snapshot;
