@@ -11,9 +11,13 @@ namespace MailArchiver.Services.Shared
         long PendingAttachments,
         long EmailsAwaitingIndex,
         string? OcrEngine = null,
-        string? OcrUnavailable = null);
+        string? OcrUnavailable = null,
+        IReadOnlyList<AttachmentTextFailure>? Failures = null);
 
     public sealed record AttachmentTextCount(string Status, string Method, long Count);
+
+    /// <summary>Why attachments could not be read: the stored reason of the failed results, most common first (the page turns it into plain words).</summary>
+    public sealed record AttachmentTextFailure(string Method, string Reason, long Count);
 
     public interface IAttachmentTextProcessor
     {
@@ -285,6 +289,14 @@ namespace MailArchiver.Services.Shared
                 .Select(g => new AttachmentTextCount(g.Key.Status, g.Key.Method, g.LongCount()))
                 .ToListAsync(ct);
 
+            // Fork (page): the most common reasons for failed results, so the page can say why in plain words.
+            var failures = await _db.AttachmentTexts.AsNoTracking()
+                .Where(t => t.Status == AttachmentText.Failed)
+                .GroupBy(t => new { t.Method, t.Error })
+                .Select(g => new { g.Key.Method, g.Key.Error, Count = g.LongCount() })
+                .OrderByDescending(x => x.Count).Take(5)
+                .ToListAsync(ct);
+
             var pendingAttachments = await _db.Database.SqlQueryRaw<long>($@"
                 SELECT COUNT(DISTINCT x.sha) AS ""Value""
                 FROM (SELECT {EffectiveSha} AS sha
@@ -299,7 +311,8 @@ namespace MailArchiver.Services.Shared
 
             return new AttachmentTextStatus(_options.Mode, texts, pendingAttachments, awaiting,
                 _options.UsesOcr && _ocr != null ? _ocr.Version : null,
-                _options.UsesOcr && _ocr != null ? _ocr.Unavailable : null);
+                _options.UsesOcr && _ocr != null ? _ocr.Unavailable : null,
+                failures.Select(f => new AttachmentTextFailure(f.Method, f.Error ?? string.Empty, f.Count)).ToList());
         }
 
         public async Task<int> RescanAsync(bool all, CancellationToken ct = default)

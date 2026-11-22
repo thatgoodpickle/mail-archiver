@@ -51,7 +51,7 @@ public class IntegrityApiController : ApiControllerBase
     [HttpGet("original-cleanup/status")]
     public async Task<IActionResult> BinStatus()
     {
-        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        if (_bin == null) return Problem(statusCode: 501, title: "The Trash is not available.");
         var s = await _bin.GetStatusAsync();
         return Ok(new
         {
@@ -74,11 +74,11 @@ public class IntegrityApiController : ApiControllerBase
     [HttpPost("original-cleanup/run")]
     public async Task<IActionResult> BinRun()
     {
-        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        if (_bin == null) return Problem(statusCode: 501, title: "The Trash is not available.");
         try
         {
             var run = await _bin.StartAsync(_authService.GetCurrentUserDisplayName(HttpContext));
-            await LogAsync("original bin run started");
+            await LogAsync("Trash run started");
             return Accepted(BinRunDto(run));
         }
         catch (InvalidOperationException ex) { return Problem(statusCode: 409, title: ex.Message); }
@@ -88,7 +88,7 @@ public class IntegrityApiController : ApiControllerBase
     [HttpGet("original-cleanup/bin")]
     public async Task<IActionResult> BinList([FromQuery] int limit = 200)
     {
-        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        if (_bin == null) return Problem(statusCode: 501, title: "The Trash is not available.");
         var items = await _bin.ListBinAsync(limit);
         return Ok(items.Select(i => new { sha256 = i.Sha256, binnedAt = i.BinnedAt, purgeAfter = i.PurgeAfter, size = i.Size }));
     }
@@ -97,7 +97,7 @@ public class IntegrityApiController : ApiControllerBase
     [HttpPost("original-cleanup/restore")]
     public async Task<IActionResult> BinRestore([FromBody] RestoreRequest request)
     {
-        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        if (_bin == null) return Problem(statusCode: 501, title: "The Trash is not available.");
         var r = await _bin.RestoreAsync(request?.Sha256 ?? string.Empty, _authService.GetCurrentUserDisplayName(HttpContext));
         return r.Restored ? Ok(new { restored = true, message = r.Message }) : Problem(statusCode: 409, title: r.Message);
     }
@@ -106,7 +106,7 @@ public class IntegrityApiController : ApiControllerBase
     [HttpPost("original-cleanup/erasure-status/{emailId:int}")]
     public async Task<IActionResult> ErasureStatusFor(int emailId)
     {
-        if (_bin == null) return Problem(statusCode: 501, title: "The original bin is not available.");
+        if (_bin == null) return Problem(statusCode: 501, title: "The Trash is not available.");
         var s = await _bin.DescribeEmailAsync(emailId);
         return Ok(new { emailId = s.EmailId, state = s.State, message = s.Message, sha256 = s.Sha256, referencedByRows = s.ReferencedByRows, binnedAt = s.BinnedAt, purgeAfter = s.PurgeAfter });
     }

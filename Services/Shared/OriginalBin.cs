@@ -132,8 +132,8 @@ namespace MailArchiver.Services.Shared
 
         private bool CanRun(out string reason)
         {
-            if (!Opt.Enabled) { reason = "The original bin is switched off (RawMessages__OriginalCleanup__Enabled=false)."; return false; }
-            if (!OriginalCleanupOptions.IsApplicable(_raw.CurrentValue, out var why)) { reason = "The original bin does not apply to this archive: " + why; return false; }
+            if (!Opt.Enabled) { reason = "The Trash is switched off (RawMessages__OriginalCleanup__Enabled=false; the name still says Bin for compatibility)."; return false; }
+            if (!OriginalCleanupOptions.IsApplicable(_raw.CurrentValue, out var why)) { reason = "The Trash does not apply to this archive: " + why; return false; }
             reason = string.Empty;
             return true;
         }
@@ -231,7 +231,7 @@ namespace MailArchiver.Services.Shared
                 var access = sp.GetService<IAccessLogService>();
                 if (access != null && c.Binned + c.Restored + c.Purged + c.Errors > 0)
                     await access.LogAccessAsync(startedBy ?? "system", AccessLogType.Integrity,
-                        searchParameters: $"original bin run {runId}: {c.Binned} binned, {c.Restored} restored, {c.Purged} purged, {c.Errors} errors");
+                        searchParameters: $"Trash run {runId}: {c.Binned} moved to the Trash, {c.Restored} restored, {c.Purged} erased for good, {c.Errors} errors");
             }
             catch (Exception ex) { _logger.LogError(ex, "Could not record the end of original bin run {RunId}", runId); }
         }
@@ -488,9 +488,9 @@ namespace MailArchiver.Services.Shared
         public async Task<OriginalRestoreResult> RestoreAsync(string sha256, string? actor)
         {
             if (!Sha.IsMatch(sha256 ?? string.Empty)) return new OriginalRestoreResult(false, "Expected a lowercase hex SHA-256 (64 characters).");
-            if (!OriginalCleanupOptions.IsApplicable(_raw.CurrentValue, out var why)) return new OriginalRestoreResult(false, "The original bin does not apply to this archive: " + why);
+            if (!OriginalCleanupOptions.IsApplicable(_raw.CurrentValue, out var why)) return new OriginalRestoreResult(false, "The Trash does not apply to this archive: " + why);
 
-            lock (_gate) { if (_current is { IsCompleted: false }) return new OriginalRestoreResult(false, "A bin run is in progress; try again when it has finished."); }
+            lock (_gate) { if (_current is { IsCompleted: false }) return new OriginalRestoreResult(false, "A Trash run is in progress; try again when it has finished."); }
 
             using var scope = _scopes.CreateScope();
             var sp = scope.ServiceProvider;
@@ -498,17 +498,17 @@ namespace MailArchiver.Services.Shared
             var paths = sp.GetRequiredService<RawMessagePathResolver>();
             var baseFull = Path.GetFullPath(paths.BasePath);
             var entry = await db.OriginalBinEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Sha256 == sha256);
-            if (entry == null) return new OriginalRestoreResult(false, "That original is not in the bin.");
+            if (entry == null) return new OriginalRestoreResult(false, "That original is not in the Trash.");
 
             var c = new Counters();
             var ok = await RestoreEntryAsync(new Ctx(db, paths, baseFull, sp.GetService<IAuditChain>(), c), entry, $"restored by {actor ?? "an administrator"}", hold: true, CancellationToken.None);
             if (ok)
             {
                 var access = sp.GetService<IAccessLogService>();
-                if (access != null) await access.LogAccessAsync(actor ?? "unknown", AccessLogType.Integrity, searchParameters: $"original restored from the bin: {sha256[..12]}");
+                if (access != null) await access.LogAccessAsync(actor ?? "unknown", AccessLogType.Integrity, searchParameters: $"original restored from the Trash: {sha256[..12]}");
             }
             return ok
-                ? new OriginalRestoreResult(true, "Restored. It stays live for at least a day so it can be re-imported; if no email refers to it after that, it goes back to the bin with a fresh retention period.")
+                ? new OriginalRestoreResult(true, "Restored. It stays live for at least a day so it can be re-imported; if no email refers to it after that, it goes back to the Trash with a fresh retention period.")
                 : new OriginalRestoreResult(false, "It could not be restored (see the server log).");
         }
 
@@ -531,16 +531,16 @@ namespace MailArchiver.Services.Shared
 
             var binned = await db.OriginalBinEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Sha256 == sha);
             if (binned != null)
-                return new ErasureStatus(emailId, "InBin", "The original is in the bin and will be deleted permanently on the date shown.", sha, 0, binned.BinnedAt, binned.BinnedAt + TimeSpan.FromDays(Opt.BinRetentionDays));
+                return new ErasureStatus(emailId, "InBin", "The original is in the Trash and will be deleted permanently on the date shown.", sha, 0, binned.BinnedAt, binned.BinnedAt + TimeSpan.FromDays(Opt.BinRetentionDays));
 
             using var s2 = _scopes.CreateScope();
             var paths = s2.ServiceProvider.GetRequiredService<RawMessagePathResolver>();
             if (File.Exists(paths.GetAbsolutePath(live)))
-                return new ErasureStatus(emailId, "LiveUnreferenced", "The original is still in place and no email refers to it; the next bin run moves it to the bin.", sha, 0, null, null);
+                return new ErasureStatus(emailId, "LiveUnreferenced", "The original is still in place and no email refers to it; the next Trash run moves it to the Trash.", sha, 0, null, null);
 
             var purged = await db.AuditChain.AsNoTracking().AnyAsync(c => c.Kind == "original.purged" && c.Sha256 == sha);
             return purged
-                ? new ErasureStatus(emailId, "Purged", "The original was deleted permanently from the bin.", sha, 0, null, null)
+                ? new ErasureStatus(emailId, "Purged", "The original was deleted permanently from the Trash.", sha, 0, null, null)
                 : new ErasureStatus(emailId, "NoFile", "No file for this original exists (it may never have been stored on the filesystem).", sha, 0, null, null);
         }
     }
@@ -583,8 +583,8 @@ namespace MailArchiver.Services.Shared
             var raw = _raw.CurrentValue;
             var o = raw.OriginalCleanup;
             string? idle = null;
-            if (!o.Enabled) idle = "Original bin is switched off";
-            else if (!OriginalCleanupOptions.IsApplicable(raw, out var why)) idle = "Original bin is on but does not apply to this archive: " + why;
+            if (!o.Enabled) idle = "The Trash is switched off";
+            else if (!OriginalCleanupOptions.IsApplicable(raw, out var why)) idle = "The Trash is on but does not apply to this archive: " + why;
             if (idle != null)
             {
                 if (idle != _lastIdleReason) _logger.LogInformation("{Reason}", idle);

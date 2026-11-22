@@ -46,7 +46,9 @@ namespace MailArchiver.Controllers
         // ----------------------------------------------------------------------------------------- page
 
         [HttpGet]
-        public async Task<IActionResult> Index()
+        public async Task<IActionResult> Index() => View(await BuildViewModelAsync());
+
+        private async Task<IntegrityStorageViewModel> BuildViewModelAsync()
         {
             var vm = new IntegrityStorageViewModel();
 
@@ -74,9 +76,13 @@ namespace MailArchiver.Controllers
                 vm.BinItems = await _bin.ListBinAsync(50);
             });
             await Section("text", async () => vm.TextStatus = await _text.GetStatusAsync());
-            await Section("settings", async () => vm.Settings = await _settings.GetAllAsync());
+            await Section("settings", async () =>
+            {
+                vm.Settings = await _settings.GetAllAsync();
+                vm.HasLocalPassword = await _settings.HasLocalPasswordAsync(Actor());
+            });
 
-            return View(vm);
+            return vm;
         }
 
         private static string AnchorLine(AuditChainHead? head, string? fingerprint)
@@ -189,7 +195,7 @@ namespace MailArchiver.Controllers
             try
             {
                 var run = await _bin.StartAsync(Who);
-                await LogAsync("original bin run started from the Integrity & Storage page");
+                await LogAsync("Trash run started from the Integrity & Storage page");
                 return Json(new { ok = true, status = run.Status, id = run.Id });
             }
             catch (Exception ex) { return Json(new { ok = false, message = Short(ex) }); }
@@ -200,7 +206,7 @@ namespace MailArchiver.Controllers
         {
             var sha = (sha256 ?? string.Empty).Trim();
             var r = await _bin.RestoreAsync(sha, Who);
-            await LogAsync($"original bin restore requested for {(sha.Length > 12 ? sha[..12] : sha)}: {(r.Restored ? "restored" : "not restored")}");
+            await LogAsync($"restore from the Trash requested for {(sha.Length > 12 ? sha[..12] : sha)}: {(r.Restored ? "restored" : "not restored")}");
             return Json(new { ok = r.Restored, message = r.Message });
         }
 
@@ -226,19 +232,43 @@ namespace MailArchiver.Controllers
 
         private SettingActor Actor() => new(_auth.GetCurrentUserId(HttpContext), Who);
 
-        private IActionResult BackToSettings(SettingChangeResult r)
+        /// <summary>
+        /// The single Save of the settings form. Fields: <c>v_&lt;Key&gt;</c> = the new value of a changed setting, <c>r_&lt;Key&gt;</c> = go back to
+        /// the standard value, <c>password</c> = the admin's password (needed when a change lowers a protection; the page asks for it in a
+        /// dialog, the server enforces it). All or nothing: see <see cref="ISettingsService.ChangeManyAsync"/>.
+        /// </summary>
+        [HttpPost, ValidateAntiForgeryToken]
+        public async Task<IActionResult> SaveSettings(IFormCollection form)
         {
-            TempData["SettingsOk"] = r.Ok;
-            TempData["SettingsMessage"] = r.Message;
+            var changes = new List<SettingChange>();
+            var resets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in form.Keys.Where(k => k.StartsWith("r_", StringComparison.Ordinal))) resets.Add(name[2..]);
+            foreach (var key in resets) changes.Add(new SettingChange(key, null, Reset: true));
+            foreach (var name in form.Keys.Where(k => k.StartsWith("v_", StringComparison.Ordinal)))
+            {
+                var key = name[2..];
+                if (resets.Contains(key)) continue;   // a reset wins over a typed value
+                changes.Add(new SettingChange(key, form[name].ToString(), Reset: false));
+            }
+
+            var result = await _settings.ChangeManyAsync(changes, Actor(), form["password"].ToString());
+
+            // Not saved: show the form again with what was typed, so nothing the admin entered is lost.
+            if (!result.Applied && (result.RowErrors.Count > 0 || result.NeedsPassword))
+            {
+                var vm = await BuildViewModelAsync();
+                vm.SaveMessage = result.Message;
+                foreach (var e in result.RowErrors) vm.SettingErrors[e.Key] = e.Value;
+                foreach (var c in changes) { if (c.Reset) vm.PostedResets.Add(c.Key); else vm.PostedValues[c.Key] = c.Value ?? string.Empty; }
+                if (result.NeedsPassword) vm.PasswordProblem = result.Message;
+                return View(nameof(Index), vm);
+            }
+
+            TempData["SettingsOk"] = result.Applied || result.NotApplied.Count == 0;
+            TempData["SettingsMessage"] = result.Message;
+            if (result.AppliedLines.Count > 0) TempData["SettingsApplied"] = string.Join("\n", result.AppliedLines);
+            if (result.NotApplied.Count > 0) TempData["SettingsNotApplied"] = string.Join("\n", result.NotApplied);
             return Redirect(Url.Action(nameof(Index))! + "#settings");
         }
-
-        [HttpPost, ValidateAntiForgeryToken]
-        public async Task<IActionResult> ChangeSetting(string? key, string? value, string? password)
-            => BackToSettings(await _settings.ChangeAsync(key ?? string.Empty, value, Actor(), password));
-
-        [HttpPost, ValidateAntiForgeryToken]
-        public async Task<IActionResult> ResetSetting(string? key, string? password)
-            => BackToSettings(await _settings.ChangeAsync(key ?? string.Empty, null, Actor(), password, reset: true));
     }
 }

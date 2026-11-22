@@ -54,8 +54,15 @@ namespace MailArchiver.Services.Shared
         /// <summary>(old, new) -> true when the change lowers a protection and needs the admin's password.</summary>
         public Func<string, string, bool>? Risky { get; init; }
 
-        /// <summary>Why a change is risky, shown next to the field.</summary>
+        /// <summary>Why a change is risky, in plain words, shown next to the field.</summary>
         public string? RiskyNote { get; init; }
+
+        /// <summary>
+        /// When the page should show the password box, as a coarse client-side rule that mirrors <see cref="Risky"/>:
+        /// "off" (true to false), "lower" (a smaller number), "zero" (a number set to 0) or "change" (any change). Presentation only:
+        /// the server still decides with <see cref="Risky"/>.
+        /// </summary>
+        public string? PasswordRule { get; init; }
 
         /// <summary>The environment variable that sets this key (and pins it).</summary>
         public string EnvVar => Key.Replace(":", "__");
@@ -108,104 +115,104 @@ namespace MailArchiver.Services.Shared
             // ----------------------------------------------------------------- EDITABLE
             new()
             {
-                Key = "Integrity:VerifyAllIntervalHours", Label = "Verify-all schedule (hours)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
+                Key = "Integrity:VerifyAllIntervalHours", Label = "How often to check every email (hours)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
                 Min = 0, Max = 8760, Target = typeof(IntegrityOptions), Read = b => I(b.Integrity.VerifyAllIntervalHours),
                 Apply = (o, v) => ((IntegrityOptions)o).VerifyAllIntervalHours = int.Parse(v, CultureInfo.InvariantCulture),
-                Help = "Re-checks every email against its original this often. 0 = only when you start it.",
-                Risky = (old, nw) => nw == "0" && old != "0", RiskyNote = "Switching the schedule off removes a periodic check."
+                Help = "Every email is checked against its stored original this often. 0 means only when you start a check yourself.",
+                Risky = (old, nw) => nw == "0" && old != "0", PasswordRule = "zero", RiskyNote = "Without it, nothing checks the archive unless you do."
             },
             new()
             {
-                Key = "Integrity:ManifestIntervalHours", Label = "Signed manifest schedule (hours)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
+                Key = "Integrity:ManifestIntervalHours", Label = "How often to write a signed record (hours)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
                 Min = 0, Max = 8760, Target = typeof(IntegrityOptions), Read = b => I(b.Integrity.ManifestIntervalHours),
                 Apply = (o, v) => ((IntegrityOptions)o).ManifestIntervalHours = int.Parse(v, CultureInfo.InvariantCulture),
-                Help = "Writes a signed list of every original this often. 0 = only when you create one.",
-                Risky = (old, nw) => nw == "0" && old != "0", RiskyNote = "Switching the schedule off removes a periodic record."
+                Help = "A signed record lists every stored email and anyone can check it later. 0 means only when you create one yourself.",
+                Risky = (old, nw) => nw == "0" && old != "0", PasswordRule = "zero", RiskyNote = "Without it, there are no regular signed records to compare against."
             },
             new()
             {
-                Key = "RawMessages:OriginalCleanup:Enabled", Label = "Original bin on", Group = SettingGroup.Editable, Kind = SettingKind.Bool,
+                Key = "RawMessages:OriginalCleanup:Enabled", Label = "Keep deleted emails' originals in the Trash first", Group = SettingGroup.Editable, Kind = SettingKind.Bool,
                 Target = typeof(RawMessageOptions), Read = b => B(b.Raw.OriginalCleanup.Enabled),
                 Apply = (o, v) => ((RawMessageOptions)o).OriginalCleanup.Enabled = v == "true",
-                Help = "Originals nobody refers to any more go to a bin and are deleted for good after the retention period. Off = they stay where they are.",
-                Risky = (old, nw) => old == "true" && nw == "false", RiskyNote = "Switching the bin off stops deleted emails' originals from ever being cleaned up."
+                Help = "When an email is deleted, its original file waits in the Trash before it is erased for good. Off means the original stays where it is and is never cleaned up.",
+                Risky = (old, nw) => old == "true" && nw == "false", PasswordRule = "off", RiskyNote = "Without the Trash, originals of deleted emails are never cleaned up."
             },
             new()
             {
-                Key = "RawMessages:OriginalCleanup:BinRetentionDays", Label = "Bin retention (days)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
+                Key = "RawMessages:OriginalCleanup:BinRetentionDays", Label = "Days to keep deleted originals in the Trash", Group = SettingGroup.Editable, Kind = SettingKind.Int,
                 Min = 7, Max = 3650, Target = typeof(RawMessageOptions), Read = b => I(b.Raw.OriginalCleanup.BinRetentionDays),
                 Apply = (o, v) => ((RawMessageOptions)o).OriginalCleanup.BinRetentionDays = int.Parse(v, CultureInfo.InvariantCulture),
-                Help = "How long a binned original can still be restored. Minimum 7 days here (the environment variable allows less).",
-                Risky = (old, nw) => long.Parse(nw, CultureInfo.InvariantCulture) < long.Parse(old, CultureInfo.InvariantCulture),
-                RiskyNote = "A shorter retention erases deleted emails' originals sooner, and files already in the bin become due earlier."
+                Help = "How long a deleted email's original can still be restored from the Trash. After that it is erased for good.",
+                Risky = (old, nw) => long.Parse(nw, CultureInfo.InvariantCulture) < long.Parse(old, CultureInfo.InvariantCulture), PasswordRule = "lower",
+                RiskyNote = "A shorter time erases deleted emails' originals sooner, including ones already in the Trash."
             },
             new()
             {
-                Key = "RawMessages:OriginalCleanup:IntervalHours", Label = "Bin run interval (hours)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
+                Key = "RawMessages:OriginalCleanup:IntervalHours", Label = "How often the Trash is checked (hours)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
                 Min = 1, Max = 168, Target = typeof(RawMessageOptions), Read = b => I(b.Raw.OriginalCleanup.IntervalHours),
                 Apply = (o, v) => ((RawMessageOptions)o).OriginalCleanup.IntervalHours = int.Parse(v, CultureInfo.InvariantCulture),
-                Help = "How often the bin looks for originals to move or purge."
+                Help = "How often to look for originals to move into the Trash or erase for good."
             },
             new()
             {
-                Key = "RawMessages:OriginalCleanup:MaxFilesPerRun", Label = "Bin files per run (cap)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
+                Key = "RawMessages:OriginalCleanup:MaxFilesPerRun", Label = "Most files handled per Trash run", Group = SettingGroup.Editable, Kind = SettingKind.Int,
                 Min = 1, Max = 100000, Target = typeof(RawMessageOptions), Read = b => I(b.Raw.OriginalCleanup.MaxFilesPerRun),
                 Apply = (o, v) => ((RawMessageOptions)o).OriginalCleanup.MaxFilesPerRun = int.Parse(v, CultureInfo.InvariantCulture),
-                Help = "Upper bound of files moved, and of files purged, in one run, so a bug cannot clear everything at once."
+                Help = "A safety limit, so a mistake cannot clear everything at once."
             },
             new()
             {
-                Key = "Ocr:Mode", Label = "Attachment text / OCR mode", Group = SettingGroup.Editable, Kind = SettingKind.Choice,
+                Key = "Ocr:Mode", Label = "Reading attachments and pictures", Group = SettingGroup.Editable, Kind = SettingKind.Choice,
                 Choices = new[] { "off", "cpu", "gpu" }, Target = typeof(AttachmentTextOptions), Read = b => b.Ocr.Mode.ToLowerInvariant(),
                 Apply = (o, v) => ((AttachmentTextOptions)o).Mode = v,
-                Help = "off = nothing is read; cpu = text layers and OCR on the CPU; gpu = same for now (the GPU build is not available yet).",
-                Risky = (old, nw) => old != nw, RiskyNote = "Switching the mode changes what is indexed and, for OCR, how much CPU the server uses."
+                Help = "Off: attachments are not read. On: text is taken from the files, and pictures and scans are read with OCR on the processor. The graphics-card option works like On for now.",
+                Risky = (old, nw) => old != nw, PasswordRule = "change", RiskyNote = "This changes what can be found by searching, and how busy the server is."
             },
             new()
             {
-                Key = "Ocr:Threads", Label = "OCR threads", Group = SettingGroup.Editable, Kind = SettingKind.Int,
+                Key = "Ocr:Threads", Label = "Processor threads for reading pictures", Group = SettingGroup.Editable, Kind = SettingKind.Int,
                 Min = 1, Max = 16, Target = typeof(AttachmentTextOptions), Read = b => I(b.Ocr.Threads),
                 Apply = (o, v) => ((AttachmentTextOptions)o).Threads = int.Parse(v, CultureInfo.InvariantCulture),
-                AppliesLive = false, RestartNote = "Applies after the application restarts (the OCR engine reads it once, when it starts).",
-                Help = "CPU threads the OCR engine may use for one image."
+                AppliesLive = false, RestartNote = "Takes effect after the application restarts.",
+                Help = "More threads read faster but use more of the server."
             },
             new()
             {
-                Key = "Ocr:MaxPages", Label = "OCR pages per scanned PDF", Group = SettingGroup.Editable, Kind = SettingKind.Int,
+                Key = "Ocr:MaxPages", Label = "Pages read from a scanned PDF", Group = SettingGroup.Editable, Kind = SettingKind.Int,
                 Min = 1, Max = 200, Target = typeof(AttachmentTextOptions), Read = b => I(b.Ocr.MaxPages),
                 Apply = (o, v) => ((AttachmentTextOptions)o).MaxPages = int.Parse(v, CultureInfo.InvariantCulture),
-                Help = "Pages read from one scanned PDF; further pages are ignored."
+                Help = "Pages after this number are not read."
             },
             new()
             {
-                Key = "Ocr:MaxImagePixels", Label = "OCR largest image (pixels)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
+                Key = "Ocr:MaxImagePixels", Label = "Largest picture to read (pixels)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
                 Min = 100_000, Max = 200_000_000, Target = typeof(AttachmentTextOptions), Read = b => I(b.Ocr.MaxImagePixels),
                 Apply = (o, v) => ((AttachmentTextOptions)o).MaxImagePixels = long.Parse(v, CultureInfo.InvariantCulture),
-                Help = "Images with more pixels are not read (checked before decoding)."
+                Help = "Bigger pictures are skipped, to protect the server."
             },
             new()
             {
-                Key = "Ocr:TimeoutSecondsPerImage", Label = "OCR time per image (seconds)", Group = SettingGroup.Editable, Kind = SettingKind.Int,
+                Key = "Ocr:TimeoutSecondsPerImage", Label = "Seconds allowed per picture or page", Group = SettingGroup.Editable, Kind = SettingKind.Int,
                 Min = 1, Max = 600, Target = typeof(AttachmentTextOptions), Read = b => I(b.Ocr.TimeoutSecondsPerImage),
                 Apply = (o, v) => ((AttachmentTextOptions)o).TimeoutSecondsPerImage = int.Parse(v, CultureInfo.InvariantCulture),
-                Help = "An image (or PDF page) that takes longer is marked failed."
+                Help = "A picture that takes longer is given up on and marked as not readable."
             },
 
             // ----------------------------------------------------------------- LOCKED (read-only, set by environment variable)
-            Locked("Storage:Mode", "Storage mode", b => b.Storage.Mode, "Standard (upstream) or Lean (original stored once, database keeps an index)."),
-            Locked("RawMessages:Enabled", "Originals stored", b => B(b.Raw.Enabled), "Whether the original of each email is kept."),
-            Locked("RawMessages:Storage", "Originals storage", b => b.Raw.Storage, "postgres or filesystem."),
-            Locked("RawMessages:FileSystem:BasePath", "Originals folder", b => b.Raw.FileSystem.BasePath, "Where the original files live."),
-            Locked("RawMessages:FileSystem:HashNamed", "Hash-named originals", b => B(b.Raw.FileSystem.HashNamed), "Files are named by their SHA-256 and written once."),
-            Locked("RawMessages:Required", "Originals required", b => B(b.Raw.Required), "Refuse an email when no verified original can be kept."),
-            Locked("RawMessages:MaxMessageSizeMb", "Largest original (MB)", b => I(b.Raw.MaxMessageSizeMb), "0 = no limit (required in lean mode)."),
-            Locked("RawMessages:IncludeGraph", "Originals for Microsoft 365", b => B(b.Raw.IncludeGraph), "Whether Graph accounts store the original too."),
-            Locked("Integrity:AuditChainEnabled", "Audit chain on", b => B(b.Integrity.AuditChainEnabled), "The hash-chained audit trail."),
-            Locked("Integrity:ManifestPath", "Manifest folder", b => b.Integrity.ManifestPath, "Where signed manifests are written."),
-            Locked("Integrity:ManifestKeyPath", "Signing key path", b => string.IsNullOrWhiteSpace(b.Integrity.ManifestKeyPath) ? "(default: next to the DataProtection keys)" : b.Integrity.ManifestKeyPath, "Where the private signing key lives."),
-            Locked("Integrity:AllowNewKey", "Allow a new signing key", b => B(b.Integrity.AllowNewKey), "Normally false: a lost key is never silently replaced."),
-            Locked("Storage:AllowSerializedImports", "Allow mbox (re-serialized) imports", b => B(b.Storage.AllowSerializedImports), "mbox copies are not byte-exact, so they are refused in lean/required mode unless this is true."),
-            Locked("Storage:AllowHashNamedMigration", "Allow moving hash-named originals", b => B(b.Storage.AllowHashNamedMigration), "Guards the filesystem-to-database migration."),
+            Locked("Storage:Mode", "Storage mode", b => b.Storage.Mode, "Standard keeps the full email in the database. Lean keeps the original once and only an index in the database."),
+            Locked("RawMessages:Enabled", "Originals stored", b => B(b.Raw.Enabled), "Whether the original of every email is kept."),
+            Locked("RawMessages:Storage", "Where originals are kept", b => b.Raw.Storage, "In the database (postgres) or as files (filesystem)."),
+            Locked("RawMessages:FileSystem:BasePath", "Originals folder", b => b.Raw.FileSystem.BasePath, "The folder that holds the original files."),
+            Locked("RawMessages:FileSystem:HashNamed", "Originals named by their fingerprint", b => B(b.Raw.FileSystem.HashNamed), "Each file is named after its own fingerprint (SHA-256) and written only once."),
+            Locked("RawMessages:Required", "Refuse emails without a verified original", b => B(b.Raw.Required), "An email is not archived unless its original can be stored and checked."),
+            Locked("RawMessages:MaxMessageSizeMb", "Largest original (MB)", b => I(b.Raw.MaxMessageSizeMb), "0 means no limit (needed in lean mode)."),
+            Locked("RawMessages:IncludeGraph", "Keep originals for Microsoft 365 accounts", b => B(b.Raw.IncludeGraph), "Whether Microsoft 365 (Graph) accounts store the original too."),
+            Locked("Integrity:AuditChainEnabled", "History log on", b => B(b.Integrity.AuditChainEnabled), "The tamper-evident history of what happened in the archive (the audit chain)."),
+            Locked("Integrity:ManifestPath", "Manifest folder", b => b.Integrity.ManifestPath, "Where signed records are written."),
+            Locked("Integrity:ManifestKeyPath", "Signing key path", b => string.IsNullOrWhiteSpace(b.Integrity.ManifestKeyPath) ? "(default: next to the DataProtection keys)" : b.Integrity.ManifestKeyPath, "Where the private signing key is kept."),
+            Locked("Integrity:AllowNewKey", "Allow a new signing key", b => B(b.Integrity.AllowNewKey), "Normally off, so a lost key is never replaced without anyone noticing."),
+            Locked("Storage:AllowSerializedImports", "Allow mbox imports", b => B(b.Storage.AllowSerializedImports), "mbox files are not exact copies of the original emails, so they are refused in lean mode unless this is on."),
+            Locked("Storage:AllowHashNamedMigration", "Allow moving originals into the database", b => B(b.Storage.AllowHashNamedMigration), "Protects against moving fingerprint-named files into the database by mistake."),
         };
 
         private static SettingDefinition Locked(string key, string label, Func<OptionsBundle, string> read, string help)
@@ -285,11 +292,25 @@ namespace MailArchiver.Services.Shared
         string Key, string Label, string Help, SettingGroup Group, SettingKind Kind, string EnvVar,
         string Value, string Default, string Source, bool Pinned, bool CanEdit,
         long Min, long Max, string[] Choices, bool AppliesLive, string? RestartNote, string? RiskyNote,
-        string? ChangedBy, DateTime? ChangedAt);
+        string? ChangedBy, DateTime? ChangedAt, string? PasswordRule = null);
 
     public sealed record SettingActor(int? UserId, string Username);
 
     public sealed record SettingChangeResult(bool Ok, string Message, bool NeedsPassword = false);
+
+    /// <summary>One requested change of the single "Save" of the settings form: a new value, or a reset to the standard value.</summary>
+    public sealed record SettingChange(string Key, string? Value, bool Reset = false);
+
+    /// <summary>
+    /// The outcome of saving several settings at once. <see cref="Applied"/> is true when at least one change was applied.
+    /// <see cref="RowErrors"/> holds a plain-language error per setting key: when it is not empty NOTHING was applied.
+    /// <see cref="NotApplied"/> lists risky changes that could not be made because the account has no local password
+    /// (single sign-on); the safe changes of the same save are still applied.
+    /// </summary>
+    public sealed record SettingBatchResult(
+        bool Applied, string Message, IReadOnlyDictionary<string, string> RowErrors,
+        IReadOnlyList<string> AppliedLines, IReadOnlyList<string> NotApplied,
+        bool NeedsPassword = false, bool NoLocalPassword = false);
 
     public interface ISettingsService
     {
@@ -301,6 +322,17 @@ namespace MailArchiver.Services.Shared
         /// chain entry and the access-log row before the change is saved. Nothing is changed when any of that fails.
         /// </summary>
         Task<SettingChangeResult> ChangeAsync(string key, string? newValue, SettingActor actor, string? password, bool reset = false);
+
+        /// <summary>
+        /// Saves several editable settings at once, all or nothing: every changed value is validated first (any bad one stops the whole
+        /// save, with an error per setting), risky changes need the admin's password (an account without a local password cannot make
+        /// them here; the safe ones of the same save still apply), the audit chain gets one 'setting.changed' entry per change BEFORE
+        /// anything is applied (no record, no change), and the values are then written in one database transaction.
+        /// </summary>
+        Task<SettingBatchResult> ChangeManyAsync(IReadOnlyList<SettingChange> changes, SettingActor actor, string? password);
+
+        /// <summary>Whether this admin has a local password (false for single sign-on accounts), so the page can say what it will do.</summary>
+        Task<bool> HasLocalPasswordAsync(SettingActor actor);
     }
 
     public sealed class SettingsService : ISettingsService
@@ -358,7 +390,8 @@ namespace MailArchiver.Services.Shared
                 else source = "default";
                 list.Add(new SettingView(d.Key, d.Label, d.Help, d.Group, d.Kind, d.EnvVar, value, def, source, pinned,
                     d.Group == SettingGroup.Editable && !pinned, d.Min, d.Max, d.Choices, d.AppliesLive, d.RestartNote, d.RiskyNote,
-                    source == "changed in this page" ? stored?.UpdatedBy : null, source == "changed in this page" ? stored?.UpdatedAt : null));
+                    source == "changed in this page" ? stored?.UpdatedBy : null, source == "changed in this page" ? stored?.UpdatedAt : null,
+                    d.PasswordRule));
             }
             return Task.FromResult<IReadOnlyList<SettingView>>(list);
         }
@@ -435,18 +468,148 @@ namespace MailArchiver.Services.Shared
             return new(true, $"{def.Label}: {old} → {target}. {note}");
         }
 
+        public async Task<SettingBatchResult> ChangeManyAsync(IReadOnlyList<SettingChange> changes, SettingActor actor, string? password)
+        {
+            var errors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var none = Array.Empty<string>();
+            var bundle = Bundle();
+            var plan = new List<(SettingDefinition Def, string Old, string Target, bool Reset, bool Risky)>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // 1. Validate EVERYTHING first. One bad row stops the whole save.
+            foreach (var c in changes)
+            {
+                var def = SettingsCatalog.Find(c.Key);
+                if (def == null) { errors[c.Key ?? string.Empty] = "Unknown setting."; continue; }
+                if (!seen.Add(def.Key)) { errors[def.Key] = $"{def.Label} was sent twice."; continue; }
+                if (def.Group != SettingGroup.Editable)
+                { errors[def.Key] = $"{def.Label} is locked: it can only be changed with the environment variable {def.EnvVar} on the host."; continue; }
+                if (_pins.IsPinned(def.Key))
+                { errors[def.Key] = $"{def.Label} is set by the environment variable {def.EnvVar}, which wins over this page. Change or remove the variable on the host."; continue; }
+
+                var old = def.Read(bundle);
+                string target;
+                if (c.Reset) target = SettingsCatalog.Default(def);
+                else if (!SettingsCatalog.TryValidate(def, c.Value, out target, out var why)) { errors[def.Key] = why; continue; }
+
+                if (target == old && (c.Reset ? !_snapshot.All.ContainsKey(def.Key) : true)) continue;   // nothing to change
+                plan.Add((def, old, target, c.Reset, def.Risky?.Invoke(old, target) ?? false));
+            }
+            if (errors.Count > 0)
+                return new(false, "Nothing was saved: some values need fixing.", errors, none, none);
+            if (plan.Count == 0)
+                return new(true, "Nothing to change.", errors, none, none);
+
+            // 2. Risky changes need the admin's own password. Without a local password (single sign-on) they cannot be made here.
+            var notApplied = new List<string>();
+            var noLocal = false;
+            var risky = plan.Where(p => p.Risky).ToList();
+            if (risky.Count > 0)
+            {
+                if (!await HasLocalPasswordAsync(actor))
+                {
+                    noLocal = true;
+                    foreach (var r in risky)
+                        notApplied.Add($"{r.Def.Label}: not changed. It needs a password, and your account has no local password (single sign-on). Set the environment variable {r.Def.EnvVar} on the host instead.");
+                    plan = plan.Where(p => !p.Risky).ToList();
+                }
+                else
+                {
+                    var denied = await CheckPasswordCoreAsync(actor, password,
+                        string.Empty,
+                        "Some of these changes lower a protection. Enter your password to confirm. Nothing was changed.");
+                    if (denied != null) return new(false, denied.Message, errors, none, none, denied.NeedsPassword);
+                }
+            }
+            if (plan.Count == 0)
+                return new(false, "Nothing was changed. " + string.Join(" ", notApplied), errors, none, notApplied, false, noLocal);
+
+            // 3. The records come FIRST: one chain entry per change. Without them nothing is applied.
+            var batch = Guid.NewGuid().ToString("N")[..12];
+            if (_integrity.CurrentValue.AuditChainEnabled)
+            {
+                for (var i = 0; i < plan.Count; i++)
+                {
+                    var p = plan[i];
+                    var entry = await _chain.AppendAsync("setting.changed", null, null,
+                        new { key = p.Def.Key, old = p.Old, @new = p.Target, reset = p.Reset, risky = p.Risky, actor = actor.Username, batch, index = i + 1, of = plan.Count });
+                    if (entry == null)
+                    {
+                        await TryAppendFailureAsync(batch, "audit chain write failed; none of the changes of this save were applied");
+                        return new(false, "The changes could not be recorded in the audit chain, so none of them were applied. Nothing was changed.", errors, none, notApplied, false, noLocal);
+                    }
+                }
+            }
+            try
+            {
+                foreach (var p in plan)
+                    await _accessLog.LogAccessAsync(actor.Username, AccessLogType.Integrity,
+                        searchParameters: $"setting {p.Def.Key}: {p.Old} -> {p.Target}{(p.Reset ? " (reset to default)" : string.Empty)}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Access log write failed while saving settings; none of the changes were applied");
+                await TryAppendFailureAsync(batch, "access log write failed; none of the changes of this save were applied");
+                return new(false, "The changes could not be recorded in the access log, so none of them were applied. Nothing was changed.", errors, none, notApplied, false, noLocal);
+            }
+
+            // 4. Apply all of them in ONE database transaction.
+            try
+            {
+                await using var tx = await _db.Database.BeginTransactionAsync();
+                var keys = plan.Select(p => p.Def.Key).ToList();
+                var rows = await _db.AppSettings.Where(s => keys.Contains(s.Key)).ToListAsync();
+                foreach (var p in plan)
+                {
+                    var row = rows.FirstOrDefault(r => string.Equals(r.Key, p.Def.Key, StringComparison.OrdinalIgnoreCase));
+                    if (p.Reset) { if (row != null) _db.AppSettings.Remove(row); }
+                    else if (row == null) _db.AppSettings.Add(new AppSetting { Key = p.Def.Key, Value = p.Target, UpdatedAt = DateTime.UtcNow, UpdatedBy = actor.Username });
+                    else { row.Value = p.Target; row.UpdatedAt = DateTime.UtcNow; row.UpdatedBy = actor.Username; }
+                }
+                await _db.SaveChangesAsync();
+                await tx.CommitAsync();
+
+                _snapshot.Replace(await _db.AppSettings.AsNoTracking().ToListAsync());
+                ClearOptionCaches();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Saving settings failed; none of the changes were applied");
+                _db.ChangeTracker.Clear();
+                await TryAppendFailureAsync(batch, "database write failed; none of the changes of this save were applied");
+                return new(false, "The settings could not be saved. The audit record says the change was attempted and failed. Nothing was changed.", errors, none, notApplied, false, noLocal);
+            }
+
+            var lines = plan.Select(p => $"{p.Def.Label}: {p.Old} → {p.Target}. {(p.Def.AppliesLive ? "It applies now." : p.Def.RestartNote ?? "It applies after a restart.")}").ToList();
+            var message = $"Saved {plan.Count} {(plan.Count == 1 ? "change" : "changes")}." + (notApplied.Count > 0 ? $" {notApplied.Count} could not be made here (see below)." : string.Empty);
+            return new(true, message, errors, lines, notApplied, false, noLocal);
+        }
+
         private async Task<SettingChangeResult?> CheckPasswordAsync(SettingActor actor, string? password, SettingDefinition def)
+            => await CheckPasswordCoreAsync(actor, password,
+                $"This change lowers a protection and needs your password, but your account has no local password (single sign-on). Set the environment variable {def.EnvVar} on the host instead.",
+                $"This change lowers a protection ({def.RiskyNote}). Enter your password to confirm.");
+
+        private async Task<User?> LocalUserAsync(SettingActor actor)
         {
             var user = actor.UserId.HasValue ? await _users.GetUserByIdAsync(actor.UserId.Value) : null;
-            if (user == null || string.IsNullOrEmpty(user.PasswordHash) || !string.IsNullOrEmpty(user.OAuthRemoteUserId))
-                return new(false, $"This change lowers a protection and needs your password, but your account has no local password (single sign-on). Set the environment variable {def.EnvVar} on the host instead.");
+            if (user == null || string.IsNullOrEmpty(user.PasswordHash) || !string.IsNullOrEmpty(user.OAuthRemoteUserId)) return null;
+            return user;
+        }
+
+        public async Task<bool> HasLocalPasswordAsync(SettingActor actor) => await LocalUserAsync(actor) != null;
+
+        private async Task<SettingChangeResult?> CheckPasswordCoreAsync(SettingActor actor, string? password, string noLocalPasswordMessage, string needPasswordMessage)
+        {
+            var user = await LocalUserAsync(actor);
+            if (user == null) return new(false, noLocalPasswordMessage);
 
             var now = DateTime.UtcNow;
             if (Failures.TryGetValue(user.Id, out var f) && now - f.Since < PasswordWindow && f.Failures >= MaxPasswordFailures)
                 return new(false, "Too many wrong passwords. Try again in a few minutes.", true);
 
             if (string.IsNullOrEmpty(password))
-                return new(false, $"This change lowers a protection ({def.RiskyNote}). Enter your password to confirm.", true);
+                return new(false, needPasswordMessage, true);
 
             if (!_users.VerifyPassword(password, user.PasswordHash))
             {
