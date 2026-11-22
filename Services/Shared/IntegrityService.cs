@@ -215,6 +215,9 @@ namespace MailArchiver.Services.Shared
             }
 
             var notCompared = new List<string>();
+            // F-09: a re-serialized original (mbox import, IMAP recovery fetch) is intact but is not the bytes the server delivered.
+            if (string.Equals(row.Source, RawMessageSource.Serialized, StringComparison.Ordinal))
+                notCompared.Add("The stored original is a re-serialized copy (source: serialized), not the bytes the server delivered.");
             var fromMessage = !string.Equals(row.Source, RawMessageSource.Graph, StringComparison.Ordinal);
             CompareFields(e, message, fromMessage, findings, notCompared);
             await CompareAttachmentsAsync(emailId, message, row.Source, fromMessage, findings, notCompared, cancellationToken);

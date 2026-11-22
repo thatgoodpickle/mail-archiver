@@ -2077,7 +2077,7 @@ namespace MailArchiver.Services.Core
                 // keeps the upstream behaviour: the email is stored in full.
                 // The decision and the lean row shape are shared with the import and Graph paths (LeanArchive).
                 var leanDecision = await LeanArchive.DecideAsync(_storageMode, _leanIngest, _rawMessageOptions, rawMessage,
-                    emailAttachments, calendarExtraction != null, rederiveInto: null, _logger, subject);
+                    emailAttachments, calendarExtraction != null, rederiveInto: archivedEmail, _logger, subject);
                 if (leanDecision.RefusalReason != null)
                 {
                     RawMessageRequirement.LogRefused(_logger, subject, leanDecision.RefusalReason, _metricsRecorder);

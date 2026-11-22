@@ -83,9 +83,18 @@ namespace MailArchiver.Services.Shared
                 else
                 {
                     plan = await ingest.TryPrepareAsync(capture, attachments.Select(a => a.Content).ToList());
+                    // F-08: the index fields always come from the verified original's own parse (the parsed copy
+                    // may have been built from a header-recovered or API-sourced message). If that parse is not
+                    // possible the email is not stored lean.
                     if (plan != null && rederiveInto != null && !TryRederiveIndexFields(rederiveInto, capture, logger, subject))
                         plan = null;
                 }
+
+                // Lean could not be completed (an attachment not found again, the original not parseable) but the
+                // original itself may still be written and verified: then the email is stored in full with it, and
+                // RawMessages:Required (refuse only when NO verified original exists) is satisfied.
+                if (plan == null && originalOnly == null)
+                    originalOnly = (await ingest.TryPrepareAsync(capture, Array.Empty<byte[]>()))?.Row;
             }
 
             // RawMessages:Required: no verified original, no archive entry. Lean ingest that could not
@@ -93,6 +102,12 @@ namespace MailArchiver.Services.Shared
             // parsed copy.
             // Rule (F-02): refuse only when NO verified original exists.
             var refusal = RawMessageRequirement.RefusalReason(raw, capture);
+            // F-09: with Required, a re-serialized "original" (mbox import, IMAP recovery fetch) is not the bytes the
+            // server delivered. It is kept and labelled (source "serialized", shown by the integrity check), but a
+            // Required archive refuses it unless serialized imports were allowed on purpose.
+            if (refusal == null && raw.Required && !storageMode.AllowSerializedImports
+                && string.Equals(capture?.Source, RawMessageSource.Serialized, StringComparison.Ordinal))
+                refusal = MetricsReasons.Serialized;
             if (refusal == null && raw.Required && storageMode.IsLean && plan == null && originalOnly == null)
                 refusal = MetricsReasons.Failed;
 

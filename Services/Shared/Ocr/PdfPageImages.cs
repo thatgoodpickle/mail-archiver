@@ -19,7 +19,7 @@ namespace MailArchiver.Services.Shared
 
         public sealed record Result(IReadOnlyList<PdfPageImage> Images, IReadOnlyList<int> Skipped, int Pages);
 
-        public static Result Extract(byte[] pdf, int maxPages, CancellationToken ct)
+        public static Result Extract(byte[] pdf, int maxPages, CancellationToken ct, long maxPixels = 25_000_000)
         {
             var images = new List<PdfPageImage>();
             var skipped = new List<int>();
@@ -37,6 +37,9 @@ namespace MailArchiver.Services.Shared
                 {
                     if (image.WidthInSamples < MinSide || image.HeightInSamples < MinSide) continue;
                     if (found >= MaxPerPage) break;
+
+                    // F-15: the declared size is checked BEFORE anything is decoded or copied, like direct images are.
+                    if ((long)image.WidthInSamples * image.HeightInSamples > maxPixels) { failed++; continue; }
 
                     byte[]? bytes = null; string format = string.Empty;
                     var raw = image.RawBytes.ToArray();

@@ -68,7 +68,7 @@ internal sealed class ReviewKit : IDisposable
 
     public sealed record Wired(EmailCoreService Svc, IntegrityService Integrity, IRawMessageStore Store, StrippedContentHydrator Hydrator, RawMessageOptions Raw);
 
-    public Wired Make(MailArchiverDbContext ctx, bool lean, bool required = false, bool hashNamed = true)
+    public Wired Make(MailArchiverDbContext ctx, bool lean, bool required = false, bool hashNamed = true, bool allowSerialized = false)
     {
         var raw = new RawMessageOptions
         {
@@ -84,7 +84,7 @@ internal sealed class ReviewKit : IDisposable
             dateHelper,
             Opt.Create(new BatchOperationOptions()), Opt.Create(new DashboardOptions { CacheSeconds = 0 }),
             memoryCache: null, rawMessageOptions: opts, rawMessageStore: router, contentHydrator: hydrator,
-            storageMode: Opt.Create(new StorageModeOptions { Mode = lean ? "Lean" : "Standard" }),
+            storageMode: Opt.Create(new StorageModeOptions { Mode = lean ? "Lean" : "Standard", AllowSerializedImports = allowSerialized }),
             leanIngest: new LeanIngest(fs, opts, NullLogger<LeanIngest>.Instance));
         return new Wired(svc, new IntegrityService(ctx, router, dateHelper), router, hydrator, raw);
     }

@@ -161,7 +161,7 @@ namespace MailArchiver.Services.Shared
                 {
                     using var pdfCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     pdfCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.TimeoutSeconds)));
-                    var extracted = await Task.Run(() => PdfPageImages.Extract(bytes, _options.MaxPages, pdfCts.Token), pdfCts.Token);
+                    var extracted = await Task.Run(() => PdfPageImages.Extract(bytes, _options.MaxPages, pdfCts.Token, _options.MaxImagePixels), pdfCts.Token);
                     pages = extracted.Pages;
                     skippedPages.AddRange(extracted.Skipped);
                     pieces.AddRange(extracted.Images.Select(i => (i.Page, i.Bytes)));
@@ -225,6 +225,35 @@ namespace MailArchiver.Services.Shared
             if (ids.Count == 0) return 0;
 
             // Locked emails are fine: the locked-email trigger ignores these two derived columns.
+            // F-16: one bad row must not stop every later email. If the batch statement fails, each email is done on its
+            // own, and an email that still fails is marked done WITHOUT text (logged) so the queue moves on.
+            try
+            {
+                await UpdateAttachmentTextAsync(ids.ToArray(), ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning("Batch indexing of attachment text failed ({Error}); doing the emails one by one", ex.GetType().Name);
+                foreach (var id in ids)
+                {
+                    try { await UpdateAttachmentTextAsync(new[] { id }, ct); }
+                    catch (Exception one) when (one is not OperationCanceledException)
+                    {
+                        _logger.LogError("Attachment text of email {EmailId} could not be indexed ({Error}); it is marked done without text", id, one.GetType().Name);
+                        await _db.Database.ExecuteSqlRawAsync(
+                            @"UPDATE mail_archiver.""ArchivedEmails"" SET ""AttachmentTextAt"" = {0} WHERE ""Id"" = {1}",
+                            new object[] { DateTime.UtcNow, id }, ct);
+                    }
+                }
+            }
+            return ids.Count;
+        }
+
+        private async Task UpdateAttachmentTextAsync(int[] ids, CancellationToken ct)
+        {
+            // The cap is also reduced by what the email's other searchable fields already use (full-text vectors
+            // are limited to about 1 MB; a character can be up to 4 bytes), so one adversarial email cannot
+            // push the whole row over the limit.
             await _db.Database.ExecuteSqlRawAsync($@"
                 UPDATE mail_archiver.""ArchivedEmails"" e
                 SET ""AttachmentText"" = NULLIF(sub.txt, ''), ""AttachmentTextAt"" = {{1}}
@@ -237,11 +266,14 @@ namespace MailArchiver.Services.Shared
                                      LEFT JOIN mail_archiver.""AttachmentContents"" c ON c.""Id"" = a.""AttachmentContentId""
                                      WHERE a.""ArchivedEmailId"" = ids.id) s
                                JOIN mail_archiver.""AttachmentTexts"" t ON t.""Sha256"" = s.sha
-                               WHERE t.""Text"" <> ''), ''), {{2}}) AS txt
+                               WHERE t.""Text"" <> ''), ''),
+                                LEAST({{2}}, GREATEST(0, (900000 - octet_length(
+                                    COALESCE(ee.""Subject"", '') || COALESCE(ee.""Body"", '') || COALESCE(ee.""From"", '') ||
+                                    COALESCE(ee.""To"", '') || COALESCE(ee.""Cc"", '') || COALESCE(ee.""Bcc"", ''))) / 4))::int) AS txt
                     FROM unnest({{0}}::int[]) AS ids(id)
+                    JOIN mail_archiver.""ArchivedEmails"" ee ON ee.""Id"" = ids.id
                 ) sub
-                WHERE e.""Id"" = sub.id", new object[] { ids.ToArray(), DateTime.UtcNow, MaxChars }, ct);
-            return ids.Count;
+                WHERE e.""Id"" = sub.id", new object[] { ids, DateTime.UtcNow, MaxChars }, ct);
         }
 
         public async Task<AttachmentTextStatus> GetStatusAsync(CancellationToken ct = default)

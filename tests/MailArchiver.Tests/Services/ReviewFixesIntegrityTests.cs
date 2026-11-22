@@ -4,7 +4,12 @@ using MailArchiver.Models;
 using MailArchiver.Services.Shared;
 using MailArchiver.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using Xunit;
+using Opt = Microsoft.Extensions.Options.Options;
 
 namespace MailArchiver.Tests.Services;
 
@@ -221,5 +226,31 @@ public class ReviewFixesIntegrityTests : IAsyncLifetime, IDisposable
         Assert.Throws<InvalidDataException>(() => RawMessageCodec.Decompress(big, expectedSize: 1000));
         Assert.Equal(1024 * 1024, RawMessageCodec.Decompress(big, expectedSize: 1024 * 1024).Length);
         Assert.Equal(1024 * 1024, RawMessageCodec.Decompress(big).Length);   // no size recorded: the absolute ceiling applies
+    }
+
+    // ---------------- F-13: two starts at once make one run ----------------
+
+    [Fact]
+    public async Task F13_ConcurrentStarts_ReturnTheSameRun_AndNoRunIsMarkedInterrupted()
+    {
+        var services = new ServiceCollection();
+        services.AddScoped(_ => _kit.NewContext());
+        services.AddScoped<IRawMessageStore>(sp =>
+        {
+            var ctx = sp.GetRequiredService<MailArchiverDbContext>();
+            return _kit.Make(ctx, lean: true).Store;
+        });
+        services.AddScoped<IIntegrityService>(sp => new IntegrityService(sp.GetRequiredService<MailArchiverDbContext>(), sp.GetRequiredService<IRawMessageStore>()));
+        var lifetime = new Mock<IHostApplicationLifetime>();
+        lifetime.SetupGet(l => l.ApplicationStopping).Returns(CancellationToken.None);
+        var runner = new IntegrityRunner(services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(), lifetime.Object, NullLogger<IntegrityRunner>.Instance);
+
+        var runs = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => runner.StartAsync("test")));
+        await runner.WaitForCurrentAsync();
+
+        Assert.Single(runs.Select(r => r.Id).Distinct());
+        await using var read = _kit.NewContext();
+        var run = await read.IntegrityRuns.AsNoTracking().SingleAsync(r => r.Id == runs[0].Id);
+        Assert.Equal(IntegrityRun.Completed, run.Status);
     }
 }

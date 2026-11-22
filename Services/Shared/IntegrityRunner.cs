@@ -44,7 +44,26 @@ namespace MailArchiver.Services.Shared
             _logger = logger;
         }
 
+        // F-13: the whole start (check, sweep of interrupted runs, create, launch) is one step, so two callers
+        // at once (the schedule and an API call, or a double click) cannot both start a pass or have the second
+        // one mark the first, just created run as "interrupted". One application instance is assumed (the
+        // background services of this application are in-process); see doc/INTEGRITY-DESIGN.md.
+        private readonly SemaphoreSlim _startGate = new(1, 1);
+
         public async Task<IntegrityRun> StartAsync(string? startedBy)
+        {
+            await _startGate.WaitAsync();
+            try
+            {
+                return await StartCoreAsync(startedBy);
+            }
+            finally
+            {
+                _startGate.Release();
+            }
+        }
+
+        private async Task<IntegrityRun> StartCoreAsync(string? startedBy)
         {
             using var scope = _scopes.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MailArchiverDbContext>();
