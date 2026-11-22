@@ -30,7 +30,7 @@ internal static class OcrTestEnv
     public static string Data(string file) => Path.Combine(AppContext.BaseDirectory, "TestData", "ocr", file);
 
     public static OnnxOcrEngine NewEngine(string? modelDir = null, long maxPixels = 25_000_000)
-        => new(Opt.Create(new AttachmentTextOptions { Mode = "cpu", ModelDirectory = modelDir ?? ModelDir ?? "/nonexistent-ocr-models", Threads = 2, MaxImagePixels = maxPixels }),
+        => new(new MutableOptionsMonitor<AttachmentTextOptions>(new AttachmentTextOptions { Mode = "cpu", ModelDirectory = modelDir ?? ModelDir ?? "/nonexistent-ocr-models", Threads = 2, MaxImagePixels = maxPixels }),
             NullLogger<OnnxOcrEngine>.Instance);
 
     /// <summary>Share of the expected words found in the output, ignoring order and counting repeats (as tools/score-ocr.py does).</summary>
@@ -338,7 +338,7 @@ public class OcrProcessorTests : IDisposable
     }
 
     private static AttachmentTextProcessor NewProcessor(MailArchiverDbContext ctx, StrippedContentHydrator hydrator, IOcrEngine? engine, string mode = "cpu")
-        => new(ctx, hydrator, Opt.Create(new AttachmentTextOptions { Mode = mode, MaxPages = 5 }), NullLogger<AttachmentTextProcessor>.Instance, engine);
+        => new(ctx, hydrator, new MutableOptionsMonitor<AttachmentTextOptions>(new AttachmentTextOptions { Mode = mode, MaxPages = 5 }), NullLogger<AttachmentTextProcessor>.Instance, engine);
 
     private static async Task<MailAccount> SeedAccountAsync(MailArchiverDbContext ctx)
     {

@@ -41,14 +41,16 @@ namespace MailArchiver.Services.Shared
 
         private readonly MailArchiverDbContext _db;
         private readonly IStrippedContentHydrator _hydrator;
-        private readonly AttachmentTextOptions _options;
+        private readonly IOptionsMonitor<AttachmentTextOptions> _optionsMonitor;
+        /// <summary>Read on every use, so a setting changed on the Integrity &amp; Storage page applies to the next attachment.</summary>
+        private AttachmentTextOptions _options => _optionsMonitor.CurrentValue;
         private readonly ILogger<AttachmentTextProcessor> _logger;
         private readonly IOcrEngine? _ocr;
 
         public AttachmentTextProcessor(MailArchiverDbContext db, IStrippedContentHydrator hydrator,
-            IOptions<AttachmentTextOptions> options, ILogger<AttachmentTextProcessor> logger, IOcrEngine? ocr = null)
+            IOptionsMonitor<AttachmentTextOptions> options, ILogger<AttachmentTextProcessor> logger, IOcrEngine? ocr = null)
         {
-            _db = db; _hydrator = hydrator; _options = options.Value; _logger = logger; _ocr = ocr;
+            _db = db; _hydrator = hydrator; _optionsMonitor = options; _logger = logger; _ocr = ocr;
         }
 
         private int MaxChars => Math.Max(1, _options.MaxTextKb) * 1024;
@@ -337,39 +339,72 @@ namespace MailArchiver.Services.Shared
     public sealed class AttachmentTextWorker : BackgroundService
     {
         private readonly IServiceScopeFactory _scopes;
-        private readonly AttachmentTextOptions _options;
+        private readonly IOptionsMonitor<AttachmentTextOptions> _monitor;
         private readonly ILogger<AttachmentTextWorker> _logger;
+        private string? _lastState;
+        private bool _firstRound = true;
 
-        public AttachmentTextWorker(IServiceScopeFactory scopes, IOptions<AttachmentTextOptions> options, ILogger<AttachmentTextWorker> logger)
+        public AttachmentTextWorker(IServiceScopeFactory scopes, IOptionsMonitor<AttachmentTextOptions> options, ILogger<AttachmentTextWorker> logger)
         {
-            _scopes = scopes; _options = options.Value; _logger = logger;
+            _scopes = scopes; _monitor = options; _logger = logger;
         }
+
+        /// <summary>How long to wait before looking at the mode again while the worker is off.</summary>
+        internal static readonly TimeSpan OffRecheck = TimeSpan.FromSeconds(30);
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            if (_options.IsOff)
-            {
-                _logger.LogInformation("Attachment text is off (Ocr:Mode=off)");
-                return;
-            }
-            if (!string.Equals(_options.Mode, "cpu", StringComparison.OrdinalIgnoreCase) && !string.Equals(_options.Mode, "gpu", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogError("Ocr:Mode '{Mode}' is not valid (off, cpu or gpu); attachment text stays off", _options.Mode);
-                return;
-            }
-            IOcrEngine? ocr;
-            using (var engineScope = _scopes.CreateScope()) ocr = engineScope.ServiceProvider.GetService<IOcrEngine>();
-            if (ocr != null && ocr.Unavailable == null)
-                _logger.LogInformation("Ocr:Mode={Mode}: OCR engine on ({Engine}); scans and photos are read, existing NeedsOcr items are queued again", _options.Mode, ocr.Name);
-            else
-                _logger.LogWarning("Ocr:Mode={Mode}: no OCR engine is available ({Reason}); only the text layer of attachments is read (scans and photos are marked NeedsOcr)",
-                    _options.Mode, ocr?.Unavailable ?? "not registered");
-            var requeue = ocr != null && ocr.Unavailable == null;
-
             try
             {
-                await Task.Delay(TimeSpan.FromMinutes(Math.Max(0, _options.StartupDelayMinutes)), stoppingToken);
-                if (requeue)
+                await Task.Delay(TimeSpan.FromMinutes(Math.Max(0, _monitor.CurrentValue.StartupDelayMinutes)), stoppingToken);
+                while (!stoppingToken.IsCancellationRequested)
+                {
+                    var worked = await RoundAsync(stoppingToken);
+                    if (!worked) await Task.Delay(CurrentIdle(), stoppingToken);
+                }
+            }
+            catch (OperationCanceledException) { /* shutting down */ }
+        }
+
+        private TimeSpan CurrentIdle()
+        {
+            var o = _monitor.CurrentValue;
+            return o.IsOff ? OffRecheck : TimeSpan.FromSeconds(Math.Max(1, o.IdleDelaySeconds));
+        }
+
+        /// <summary>
+        /// One look at the mode and, when the worker is on, one batch. The mode is read again every round (options monitor), so
+        /// switching it on or off on the Integrity &amp; Storage page applies without a restart. Returns true when work was done.
+        /// </summary>
+        internal async Task<bool> RoundAsync(CancellationToken stoppingToken)
+        {
+            var o = _monitor.CurrentValue;
+            if (o.IsOff)
+            {
+                if (_lastState != "off") _logger.LogInformation("Attachment text is off (Ocr:Mode=off)");
+                _lastState = "off";
+                return false;
+            }
+            if (!o.UsesOcr)
+            {
+                if (_lastState != "invalid:" + o.Mode) _logger.LogError("Ocr:Mode '{Mode}' is not valid (off, cpu or gpu); attachment text stays off", o.Mode);
+                _lastState = "invalid:" + o.Mode;
+                return false;
+            }
+
+            // Mode just became cpu/gpu (at start or later): say what is available and queue the earlier NeedsOcr items once.
+            var state = "on:" + o.Mode.ToLowerInvariant();
+            if (_lastState != state)
+            {
+                IOcrEngine? ocr;
+                using (var engineScope = _scopes.CreateScope()) ocr = engineScope.ServiceProvider.GetService<IOcrEngine>();
+                if (ocr != null && ocr.Unavailable == null)
+                    _logger.LogInformation("Ocr:Mode={Mode}: OCR engine on ({Engine}); scans and photos are read, existing NeedsOcr items are queued again", o.Mode, ocr.Name);
+                else
+                    _logger.LogWarning("Ocr:Mode={Mode}: no OCR engine is available ({Reason}); only the text layer of attachments is read (scans and photos are marked NeedsOcr)",
+                        o.Mode, ocr?.Unavailable ?? "not registered");
+                _lastState = state;
+                if (ocr != null && ocr.Unavailable == null)
                 {
                     try
                     {
@@ -380,21 +415,17 @@ namespace MailArchiver.Services.Shared
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
                     catch (Exception ex) { _logger.LogError(ex, "Could not queue NeedsOcr results for OCR"); }
                 }
-                while (!stoppingToken.IsCancellationRequested)
-                {
-                    var work = 0;
-                    try
-                    {
-                        using var scope = _scopes.CreateScope();
-                        work = await scope.ServiceProvider.GetRequiredService<IAttachmentTextProcessor>().ProcessBatchAsync(stoppingToken);
-                    }
-                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
-                    catch (Exception ex) { _logger.LogError(ex, "Attachment text round failed"); }
-
-                    if (work == 0) await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, _options.IdleDelaySeconds)), stoppingToken);
-                }
             }
-            catch (OperationCanceledException) { /* shutting down */ }
+
+            var work = 0;
+            try
+            {
+                using var scope = _scopes.CreateScope();
+                work = await scope.ServiceProvider.GetRequiredService<IAttachmentTextProcessor>().ProcessBatchAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+            catch (Exception ex) { _logger.LogError(ex, "Attachment text round failed"); }
+            return work > 0;
         }
     }
 }

@@ -28,7 +28,9 @@ namespace MailArchiver.Services.Shared
         private static readonly float[] DetMean = { 0.485f, 0.456f, 0.406f };
         private static readonly float[] DetStd = { 0.229f, 0.224f, 0.225f };
 
-        private readonly AttachmentTextOptions _options;
+        private readonly IOptionsMonitor<AttachmentTextOptions> _optionsMonitor;
+        /// <summary>Per-image limits are read on every use; the session settings (threads, provider) when the session is created.</summary>
+        private AttachmentTextOptions _options => _optionsMonitor.CurrentValue;
         private readonly ILogger<OnnxOcrEngine> _logger;
         private readonly SemaphoreSlim _gate = new(1, 1);
         private readonly object _loadLock = new();
@@ -39,9 +41,9 @@ namespace MailArchiver.Services.Shared
         private string? _unavailable;
         private bool _loaded;
 
-        public OnnxOcrEngine(IOptions<AttachmentTextOptions> options, ILogger<OnnxOcrEngine> logger)
+        public OnnxOcrEngine(IOptionsMonitor<AttachmentTextOptions> options, ILogger<OnnxOcrEngine> logger)
         {
-            _options = options.Value; _logger = logger;
+            _optionsMonitor = options; _logger = logger;
         }
 
         public string Name => EngineName;

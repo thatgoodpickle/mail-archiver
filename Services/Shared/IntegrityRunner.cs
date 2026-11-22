@@ -224,66 +224,72 @@ namespace MailArchiver.Services.Shared
         }
     }
 
-    /// <summary>Starts a verify-all run every <c>Integrity:VerifyAllIntervalHours</c> hours (off by default).</summary>
+    /// <summary>
+    /// Starts a verify-all run every <c>Integrity:VerifyAllIntervalHours</c> hours and writes a signed manifest every
+    /// <c>Integrity:ManifestIntervalHours</c> hours (each off at 0). Both values are read again on every tick (the options
+    /// monitor), so a change on the Integrity &amp; Storage page applies within a minute without a restart. Switching a
+    /// schedule off and on again starts a run at the next tick; the startup delay is only waited once.
+    /// </summary>
     public sealed class IntegrityScheduleService : BackgroundService
     {
+        /// <summary>How often the schedules are looked at. A change of an interval is picked up within this time.</summary>
+        internal static readonly TimeSpan TickEvery = TimeSpan.FromSeconds(30);
+
         private readonly IIntegrityRunner _runner;
-        private readonly IntegrityOptions _options;
+        private readonly IOptionsMonitor<IntegrityOptions> _options;
         private readonly ILogger<IntegrityScheduleService> _logger;
         private readonly IServiceScopeFactory? _scopes;
+        private DateTime? _lastVerify;
+        private DateTime? _lastManifest;
 
-        public IntegrityScheduleService(IIntegrityRunner runner, IOptions<IntegrityOptions> options, ILogger<IntegrityScheduleService> logger,
+        public IntegrityScheduleService(IIntegrityRunner runner, IOptionsMonitor<IntegrityOptions> options, ILogger<IntegrityScheduleService> logger,
             IServiceScopeFactory? scopes = null)
         {
             _scopes = scopes;
             _runner = runner;
-            _options = options.Value;
+            _options = options;
             _logger = logger;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            // Both schedules run in this one service; each is off at 0.
-            var manifests = _options.ManifestIntervalHours > 0 && _scopes != null ? RunManifestScheduleAsync(stoppingToken) : Task.CompletedTask;
-            await Task.WhenAll(RunVerifyScheduleAsync(stoppingToken), manifests);
-        }
-
-        private async Task RunManifestScheduleAsync(CancellationToken stoppingToken)
-        {
             try
             {
-                await Task.Delay(TimeSpan.FromMinutes(Math.Max(0, _options.ScheduleStartupDelayMinutes)), stoppingToken);
+                await Task.Delay(TimeSpan.FromMinutes(Math.Max(0, _options.CurrentValue.ScheduleStartupDelayMinutes)), stoppingToken);
                 while (!stoppingToken.IsCancellationRequested)
                 {
-                    try
-                    {
-                        using var scope = _scopes!.CreateScope();
-                        await scope.ServiceProvider.GetRequiredService<IManifestService>().CreateAsync("schedule", stoppingToken);
-                    }
-                    catch (Exception ex) { _logger.LogError(ex, "Could not write the scheduled manifest"); }
-
-                    await Task.Delay(TimeSpan.FromHours(_options.ManifestIntervalHours), stoppingToken);
+                    await TickAsync(DateTime.UtcNow, stoppingToken);
+                    await Task.Delay(TickEvery, stoppingToken);
                 }
             }
             catch (OperationCanceledException) { /* shutting down */ }
         }
 
-        private async Task RunVerifyScheduleAsync(CancellationToken stoppingToken)
+        /// <summary>One look at both schedules (also used by tests with a controlled clock).</summary>
+        internal async Task TickAsync(DateTime nowUtc, CancellationToken stoppingToken)
         {
-            if (_options.VerifyAllIntervalHours <= 0) return;
+            var o = _options.CurrentValue;
 
-            try
+            if (o.VerifyAllIntervalHours <= 0) _lastVerify = null;
+            else if (_lastVerify == null || nowUtc - _lastVerify.Value >= TimeSpan.FromHours(o.VerifyAllIntervalHours))
             {
-                await Task.Delay(TimeSpan.FromMinutes(Math.Max(0, _options.ScheduleStartupDelayMinutes)), stoppingToken);
-                while (!stoppingToken.IsCancellationRequested)
-                {
-                    try { await _runner.StartAsync("schedule"); }
-                    catch (Exception ex) { _logger.LogError(ex, "Could not start the scheduled integrity run"); }
-
-                    await Task.Delay(TimeSpan.FromHours(_options.VerifyAllIntervalHours), stoppingToken);
-                }
+                _lastVerify = nowUtc;
+                try { await _runner.StartAsync("schedule"); }
+                catch (Exception ex) { _logger.LogError(ex, "Could not start the scheduled integrity run"); }
             }
-            catch (OperationCanceledException) { /* shutting down */ }
+
+            if (o.ManifestIntervalHours <= 0 || _scopes == null) _lastManifest = null;
+            else if (_lastManifest == null || nowUtc - _lastManifest.Value >= TimeSpan.FromHours(o.ManifestIntervalHours))
+            {
+                _lastManifest = nowUtc;
+                try
+                {
+                    using var scope = _scopes.CreateScope();
+                    await scope.ServiceProvider.GetRequiredService<IManifestService>().CreateAsync("schedule", stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+                catch (Exception ex) { _logger.LogError(ex, "Could not write the scheduled manifest"); }
+            }
         }
     }
 }

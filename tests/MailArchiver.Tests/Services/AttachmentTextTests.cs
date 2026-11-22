@@ -238,7 +238,7 @@ public class AttachmentTextProcessorTests : IDisposable
     }
 
     private AttachmentTextProcessor NewProcessor(MailArchiverDbContext ctx, StrippedContentHydrator hydrator, AttachmentTextOptions? options = null)
-        => new(ctx, hydrator, Opt.Create(options ?? new AttachmentTextOptions { Mode = "cpu" }), NullLogger<AttachmentTextProcessor>.Instance);
+        => new(ctx, hydrator, new MutableOptionsMonitor<AttachmentTextOptions>(options ?? new AttachmentTextOptions { Mode = "cpu" }), NullLogger<AttachmentTextProcessor>.Instance);
 
     private static async Task<MailAccount> SeedAccountAsync(MailArchiverDbContext ctx)
     {
@@ -480,10 +480,9 @@ public class AttachmentTextProcessorTests : IDisposable
             var services = new ServiceCollection();
             services.AddScoped(_ => NewContext());
             var worker = new AttachmentTextWorker(services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
-                Opt.Create(new AttachmentTextOptions()), NullLogger<AttachmentTextWorker>.Instance);
+                new MutableOptionsMonitor<AttachmentTextOptions>(new AttachmentTextOptions()), NullLogger<AttachmentTextWorker>.Instance);
 
-            await worker.StartAsync(CancellationToken.None);
-            await worker.ExecuteTask!;   // returns at once when off
+            Assert.False(await worker.RoundAsync(CancellationToken.None));   // off: a round does nothing (the loop only waits and looks again)
 
             Assert.Empty(await SearchAsync(svc, account, word));
             await using var read = NewContext();

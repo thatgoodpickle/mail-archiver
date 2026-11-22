@@ -21,6 +21,7 @@ namespace MailArchiver.Data
         public DbSet<IntegrityFinding> IntegrityFindings { get; set; }
         public DbSet<AuditChainEntry> AuditChain { get; set; }
         public DbSet<OriginalBinEntry> OriginalBinEntries { get; set; }
+        public DbSet<AppSetting> AppSettings { get; set; }
         public DbSet<OriginalCleanupRun> OriginalCleanupRuns { get; set; }
         public DbSet<AttachmentText> AttachmentTexts { get; set; }
         public DbSet<User> Users { get; set; }
@@ -227,6 +228,17 @@ namespace MailArchiver.Data
                 e.HasKey(x => x.Sha256);
                 e.Property(x => x.ExtractedAt).HasColumnType("timestamp without time zone");
                 e.HasIndex(x => x.Status);
+            });
+
+            // Fork: admin-editable settings of the Integrity & Storage page (environment variables win over these).
+            modelBuilder.Entity<AppSetting>(e =>
+            {
+                e.ToTable("AppSettings", "mail_archiver");
+                e.HasKey(x => x.Key);
+                e.Property(x => x.Key).HasColumnType("text");
+                e.Property(x => x.Value).HasColumnType("text").IsRequired();
+                e.Property(x => x.UpdatedAt).HasColumnType("timestamp without time zone");
+                e.Property(x => x.UpdatedBy).HasColumnType("text");
             });
 
             // Fork (review F-11): the recycle bin for hash-named originals, and the runs of the collector.

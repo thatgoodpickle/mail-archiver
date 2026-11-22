@@ -513,6 +513,15 @@ builder.Services.Configure<MailArchiver.Models.AttachmentTextOptions>(builder.Co
 builder.Services.AddScoped<MailArchiver.Services.Shared.IAttachmentTextProcessor, MailArchiver.Services.Shared.AttachmentTextProcessor>();
 builder.Services.AddSingleton<MailArchiver.Services.Shared.IOcrEngine, MailArchiver.Services.Shared.OnnxOcrEngine>();
 builder.Services.AddHostedService<MailArchiver.Services.Shared.AttachmentTextWorker>();
+// Fork: settings of the Integrity & Storage page. Stored values (AppSettings table) are laid over the configuration by the
+// post-configure overlays; an environment variable pins a key. Background services read the options through IOptionsMonitor,
+// so a change applies without a restart (see doc/INTEGRITY-DESIGN.md, "Settings").
+builder.Services.AddSingleton<MailArchiver.Services.Shared.ISettingsSnapshot, MailArchiver.Services.Shared.SettingsSnapshot>();
+builder.Services.AddSingleton<MailArchiver.Services.Shared.SettingsPins>();
+builder.Services.AddSingleton<Microsoft.Extensions.Options.IPostConfigureOptions<MailArchiver.Models.IntegrityOptions>, MailArchiver.Services.Shared.SettingsOverlay<MailArchiver.Models.IntegrityOptions>>();
+builder.Services.AddSingleton<Microsoft.Extensions.Options.IPostConfigureOptions<MailArchiver.Models.RawMessageOptions>, MailArchiver.Services.Shared.SettingsOverlay<MailArchiver.Models.RawMessageOptions>>();
+builder.Services.AddSingleton<Microsoft.Extensions.Options.IPostConfigureOptions<MailArchiver.Models.AttachmentTextOptions>, MailArchiver.Services.Shared.SettingsOverlay<MailArchiver.Models.AttachmentTextOptions>>();
+builder.Services.AddScoped<MailArchiver.Services.Shared.ISettingsService, MailArchiver.Services.Shared.SettingsService>();
 builder.Services.AddSingleton<MailArchiver.Services.Shared.IIntegrityRunner, MailArchiver.Services.Shared.IntegrityRunner>();
 builder.Services.AddHostedService<MailArchiver.Services.Shared.IntegrityScheduleService>();
 
@@ -1125,6 +1134,9 @@ using (var scope = app.Services.CreateScope())
             context.Database.Migrate();
         }
         context.Database.ExecuteSqlRaw("CREATE EXTENSION IF NOT EXISTS citext;");
+
+        // Fork: load the settings stored by the Integrity & Storage page (never prevents start-up).
+        await MailArchiver.Services.Shared.SettingsLoader.LoadAsync(app.Services, services.GetRequiredService<ILogger<Program>>());
 
         // Create admin user if it doesn't exist
         var authOptions = services.GetRequiredService<IOptions<AuthenticationOptions>>().Value;

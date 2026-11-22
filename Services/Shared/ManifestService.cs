@@ -31,6 +31,13 @@ namespace MailArchiver.Services.Shared
 
         /// <summary>SHA-256 of the DER public key (as in public-key.pem), or null when no key exists yet.</summary>
         string? GetPublicKeyFingerprint();
+
+        /// <summary>
+        /// The full path of one downloadable file of a manifest, or null. <paramref name="name"/> must be a manifest name
+        /// (manifest-YYYYMMDDTHHMMSSZ) and <paramref name="kind"/> one of json, sig, jsonl or key (the public key); anything
+        /// else, a missing file or a symbolic link gives null. Never accepts a path.
+        /// </summary>
+        string? ResolveFile(string? name, string? kind);
     }
 
     /// <summary>
@@ -43,7 +50,7 @@ namespace MailArchiver.Services.Shared
     /// </summary>
     public sealed class ManifestService : IManifestService
     {
-        private static readonly Regex NamePattern = new(@"^manifest-\d{8}T\d{6}Z$", RegexOptions.Compiled);
+        private static readonly Regex NamePattern = new(@"^manifest-\d{8}T\d{6}Z\z", RegexOptions.Compiled);
         private static readonly SemaphoreSlim Gate = new(1, 1);
 
         private readonly MailArchiverDbContext _db;
@@ -168,6 +175,27 @@ namespace MailArchiver.Services.Shared
                 }
             }
             finally { Gate.Release(); }
+        }
+
+        public string? ResolveFile(string? name, string? kind)
+        {
+            string file;
+            switch ((kind ?? string.Empty).ToLowerInvariant())
+            {
+                case "key": file = "public-key.pem"; break;
+                case "json": case "sig": case "jsonl":
+                    if (name == null || !NamePattern.IsMatch(name)) return null;
+                    file = name + "." + kind!.ToLowerInvariant();
+                    break;
+                default: return null;
+            }
+            var path = Path.Combine(Dir, file);
+            try
+            {
+                var fi = new FileInfo(path);
+                return fi.Exists && fi.LinkTarget == null ? fi.FullName : null;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return null; }
         }
 
         public string? GetPublicKeyFingerprint()

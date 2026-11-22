@@ -138,7 +138,7 @@ public class OriginalBinTests : IAsyncLifetime
         var lifetime = new Mock<IHostApplicationLifetime>();
         lifetime.SetupGet(l => l.ApplicationStopping).Returns(CancellationToken.None);
         var sp = services.BuildServiceProvider();
-        return new OriginalBin(sp.GetRequiredService<IServiceScopeFactory>(), lifetime.Object, Opt.Create(raw), integrity, NullLogger<OriginalBin>.Instance);
+        return new OriginalBin(sp.GetRequiredService<IServiceScopeFactory>(), lifetime.Object, new MutableOptionsMonitor<RawMessageOptions>(raw), new MutableOptionsMonitor<IntegrityOptions>(integrity.Value), NullLogger<OriginalBin>.Instance);
     }
 
     /// <summary>Writes a hash-named original (gzip of fresh synthetic bytes) and returns (sha, relative path). Aged by default so it is not "recent".</summary>

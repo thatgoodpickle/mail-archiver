@@ -64,20 +64,20 @@ namespace MailArchiver.Services.Shared
 
         private readonly IServiceScopeFactory _scopes;
         private readonly IHostApplicationLifetime _lifetime;
-        private readonly IOptions<RawMessageOptions> _raw;
-        private readonly IOptions<IntegrityOptions> _integrity;
+        private readonly IOptionsMonitor<RawMessageOptions> _raw;
+        private readonly IOptionsMonitor<IntegrityOptions> _integrity;
         private readonly ILogger<OriginalBin> _logger;
         private readonly object _gate = new();
         private Task? _current;
         private int _currentRunId;
 
-        public OriginalBin(IServiceScopeFactory scopes, IHostApplicationLifetime lifetime, IOptions<RawMessageOptions> raw,
-            IOptions<IntegrityOptions> integrity, ILogger<OriginalBin> logger)
+        public OriginalBin(IServiceScopeFactory scopes, IHostApplicationLifetime lifetime, IOptionsMonitor<RawMessageOptions> raw,
+            IOptionsMonitor<IntegrityOptions> integrity, ILogger<OriginalBin> logger)
         {
             _scopes = scopes; _lifetime = lifetime; _raw = raw; _integrity = integrity; _logger = logger;
         }
 
-        private OriginalCleanupOptions Opt => _raw.Value.OriginalCleanup;
+        private OriginalCleanupOptions Opt => _raw.CurrentValue.OriginalCleanup;
 
         // ----- naming and path safety ------------------------------------------------------------------------
 
@@ -133,7 +133,7 @@ namespace MailArchiver.Services.Shared
         private bool CanRun(out string reason)
         {
             if (!Opt.Enabled) { reason = "The original bin is switched off (RawMessages__OriginalCleanup__Enabled=false)."; return false; }
-            if (!OriginalCleanupOptions.IsApplicable(_raw.Value, out var why)) { reason = "The original bin does not apply to this archive: " + why; return false; }
+            if (!OriginalCleanupOptions.IsApplicable(_raw.CurrentValue, out var why)) { reason = "The original bin does not apply to this archive: " + why; return false; }
             reason = string.Empty;
             return true;
         }
@@ -247,7 +247,7 @@ namespace MailArchiver.Services.Shared
         /// </summary>
         private async Task<bool> RecordAsync(Ctx x, string kind, string sha, object payload, CancellationToken ct)
         {
-            if (!_integrity.Value.AuditChainEnabled || x.Chain == null) return true;
+            if (!_integrity.CurrentValue.AuditChainEnabled || x.Chain == null) return true;
             return await x.Chain.AppendAsync(kind, null, sha, payload, ct) != null;
         }
 
@@ -464,7 +464,7 @@ namespace MailArchiver.Services.Shared
         {
             using var scope = _scopes.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MailArchiverDbContext>();
-            var applicable = OriginalCleanupOptions.IsApplicable(_raw.Value, out var why);
+            var applicable = OriginalCleanupOptions.IsApplicable(_raw.CurrentValue, out var why);
             var days = TimeSpan.FromDays(Opt.BinRetentionDays);
             var inBin = await db.OriginalBinEntries.CountAsync();
             var bytes = inBin == 0 ? 0 : await db.OriginalBinEntries.SumAsync(e => e.Size);
@@ -488,7 +488,7 @@ namespace MailArchiver.Services.Shared
         public async Task<OriginalRestoreResult> RestoreAsync(string sha256, string? actor)
         {
             if (!Sha.IsMatch(sha256 ?? string.Empty)) return new OriginalRestoreResult(false, "Expected a lowercase hex SHA-256 (64 characters).");
-            if (!OriginalCleanupOptions.IsApplicable(_raw.Value, out var why)) return new OriginalRestoreResult(false, "The original bin does not apply to this archive: " + why);
+            if (!OriginalCleanupOptions.IsApplicable(_raw.CurrentValue, out var why)) return new OriginalRestoreResult(false, "The original bin does not apply to this archive: " + why);
 
             lock (_gate) { if (_current is { IsCompleted: false }) return new OriginalRestoreResult(false, "A bin run is in progress; try again when it has finished."); }
 
@@ -545,33 +545,59 @@ namespace MailArchiver.Services.Shared
         }
     }
 
-    /// <summary>Runs the bin every <c>RawMessages:OriginalCleanup:IntervalHours</c> hours while it is on and applies to this archive.</summary>
+    /// <summary>
+    /// Runs the bin every <c>RawMessages:OriginalCleanup:IntervalHours</c> hours while it is on and applies to this archive.
+    /// The settings are read again on every tick (options monitor), so switching the bin on or off, or changing its interval,
+    /// on the Integrity &amp; Storage page applies within a minute. The startup delay is waited once.
+    /// </summary>
     public sealed class OriginalBinService : BackgroundService
     {
-        private readonly IOriginalBin _bin;
-        private readonly IOptions<RawMessageOptions> _raw;
-        private readonly ILogger<OriginalBinService> _logger;
+        internal static readonly TimeSpan TickEvery = TimeSpan.FromSeconds(30);
 
-        public OriginalBinService(IOriginalBin bin, IOptions<RawMessageOptions> raw, ILogger<OriginalBinService> logger)
+        private readonly IOriginalBin _bin;
+        private readonly IOptionsMonitor<RawMessageOptions> _raw;
+        private readonly ILogger<OriginalBinService> _logger;
+        private DateTime? _lastRun;
+        private string? _lastIdleReason;
+
+        public OriginalBinService(IOriginalBin bin, IOptionsMonitor<RawMessageOptions> raw, ILogger<OriginalBinService> logger)
         { _bin = bin; _raw = raw; _logger = logger; }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            var o = _raw.Value.OriginalCleanup;
-            if (!o.Enabled) { _logger.LogInformation("Original bin is switched off"); return; }
-            if (!OriginalCleanupOptions.IsApplicable(_raw.Value, out var why)) { _logger.LogInformation("Original bin is on but does not apply to this archive: {Reason}", why); return; }
             try
             {
-                await Task.Delay(TimeSpan.FromMinutes(Math.Max(0, o.StartupDelayMinutes)), stoppingToken);
+                await Task.Delay(TimeSpan.FromMinutes(Math.Max(0, _raw.CurrentValue.OriginalCleanup.StartupDelayMinutes)), stoppingToken);
                 while (!stoppingToken.IsCancellationRequested)
                 {
-                    try { await _bin.RunOnceAsync("schedule", stoppingToken); }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex) { _logger.LogError(ex, "Scheduled original bin run failed"); }
-                    await Task.Delay(TimeSpan.FromHours(Math.Max(1, o.IntervalHours)), stoppingToken);
+                    await TickAsync(DateTime.UtcNow, stoppingToken);
+                    await Task.Delay(TickEvery, stoppingToken);
                 }
             }
             catch (OperationCanceledException) { /* shutting down */ }
+        }
+
+        /// <summary>One look at the schedule (also used by tests with a controlled clock).</summary>
+        internal async Task TickAsync(DateTime nowUtc, CancellationToken stoppingToken)
+        {
+            var raw = _raw.CurrentValue;
+            var o = raw.OriginalCleanup;
+            string? idle = null;
+            if (!o.Enabled) idle = "Original bin is switched off";
+            else if (!OriginalCleanupOptions.IsApplicable(raw, out var why)) idle = "Original bin is on but does not apply to this archive: " + why;
+            if (idle != null)
+            {
+                if (idle != _lastIdleReason) _logger.LogInformation("{Reason}", idle);
+                _lastIdleReason = idle; _lastRun = null;
+                return;
+            }
+            _lastIdleReason = null;
+
+            if (_lastRun != null && nowUtc - _lastRun.Value < TimeSpan.FromHours(Math.Max(1, o.IntervalHours))) return;
+            _lastRun = nowUtc;
+            try { await _bin.RunOnceAsync("schedule", stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+            catch (Exception ex) { _logger.LogError(ex, "Scheduled original bin run failed"); }
         }
     }
 }

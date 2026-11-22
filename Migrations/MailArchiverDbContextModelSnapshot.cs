@@ -251,6 +251,26 @@ namespace MailArchiver.Migrations
                     b.ToTable("ApiKeys", "mail_archiver");
                 });
 
+            modelBuilder.Entity("MailArchiver.Models.AppSetting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("AppSettings", "mail_archiver");
+                });
+
             modelBuilder.Entity("MailArchiver.Models.ArchivedEmail", b =>
                 {
                     b.Property<int>("Id")
