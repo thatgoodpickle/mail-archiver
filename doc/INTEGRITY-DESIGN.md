@@ -353,6 +353,58 @@ re-created while manifests exist unless `Integrity:AllowNewKey`.
 - *Decisions waiting for the user:* F-11 (what deleting an email does to its hash-named original) and F-21 (a
   versioned chain hash input). See REVIEW-fixes-status.md.
 
+### The original bin: deleting an email really removes its original, after 30 days (review F-11, 2026-11-22, CI green, 1500 tests)
+
+**It is ON by default.** Switch it off with `RawMessages__OriginalCleanup__Enabled=false`. It only ever acts on
+hash-named originals on the filesystem (lean mode uses them), so on an archive without `HashNamed` it does nothing and
+says so in the log and in `GET /api/v1/integrity/original-cleanup/status` (`applicable: false`).
+
+Why it exists: hash-named originals are shared by byte-identical emails, so they were never deleted with an email (the
+review found that deletion and retention did not remove the original). Now, like a recycle bin:
+
+1. **Bin.** A hash-named file that NO `RawMessages` row refers to is MOVED (atomic rename, then verified by size and
+   by hashing the decompressed content) to `.bin/` under the originals folder, same layout. The reference check is
+   repeated right before the move and right after it (a row that appeared meanwhile undoes the move). The first run
+   after an upgrade moves files that are already unreferenced into the bin; it deletes nothing outright.
+2. **Hold.** The file stays in the bin for `BinRetentionDays` (default 30, minimum 1), counted from the day it was
+   binned (`OriginalBinEntries.BinnedAt`). Nothing is purged earlier, however old the file was.
+3. **Restore.** If a row refers to a binned file again (the same bytes were archived again, or the email came back),
+   the next run moves it back (or drops the bin copy when a live copy was written again). An admin can also move one
+   back by SHA-256: `POST /api/v1/integrity/original-cleanup/restore` with `{"sha256": "..."}` (never a path). A restored
+   original stays live for at least a day so it can be re-imported; if nothing refers to it after that, it returns to
+   the bin with a fresh retention period.
+4. **Purge.** After the retention period the bin copy is deleted permanently, after re-checking that no row refers to it
+   (if one does, it is restored instead).
+
+Safety rails: files written or reused within the last 24 hours are left alone (ingest touches a reused file, so an import
+that is about to commit its row is never raced); at most `MaxFilesPerRun` (default 1000) are moved and, separately, purged
+per run; only paths of the form `ab/cd/<64 hex>.eml.gz` whose directory names match the hash are touched (id-named
+files, anything malformed, symlinks, and anything resolving outside the originals folder are refused); one run at a time
+in a process; every action is written to the audit chain BEFORE it happens (`original.binned`, `original.restored`,
+`original.purged`, `original.purge-failed`; an action whose record cannot be written is not done), plus an access-log row
+of type Integrity per run and per manual restore; it never runs while the storage settings do not describe hash-named
+filesystem originals. Ownership: the older orphan collector owns id-named files and ignores hash-named files and the
+bin; this collector owns hash-named files and the bin and ignores id-named files.
+
+What verification does with it: a binned or purged original is not a finding for a deleted email (the email's own
+`email.deleted` entry explains it, and manifest verify is unaffected). It IS a finding when a row still refers to an
+original whose last bin event is `binned` or `purged` (no later restore or new store of the same bytes): chain verify
+reports it and sets `ok` to false, and a per-email check says the original is in the bin and how to restore it. A file
+that is missing with no bin entry and no chain record stays a plain `Missing`.
+
+Settings: `RawMessages__OriginalCleanup__Enabled` (true), `__BinRetentionDays` (30), `__IntervalHours` (1, so a deleted
+email's original reaches the bin soon), `__MaxFilesPerRun` (1000), `__StartupDelayMinutes` (15). Admin API (all under
+`/api/v1/integrity/original-cleanup/`): `GET status` (on/applicable, counts in the bin and bytes, earliest purge date,
+totals, last run), `POST run` (one pass now, takes no path), `GET bin` (sha256, binned at, purge date, size; no paths),
+`POST restore`, `POST erasure-status/{emailId}` (read-only: for one already deleted email, whether its original is still
+shared by other emails, in the bin until when, or gone).
+
+**The honest limit:** while an original is in the bin it can be restored. After the retention period it is gone for good,
+except from a backup. Leaving the bin on (the default) therefore means that deleted emails are really erased after 30
+days, and from then on the archive no longer proves what those emails contained. The audit chain keeps only their hashes.
+The grace period is counted from when the bin moved the file, not from when the email was deleted (a deletion is
+noticed within `IntervalHours`).
+
 ## Phase 1: make the original mandatory, prove it
 
 1. `RawMessages:Required` (default false, so upstream behaviour is unchanged): when true,

@@ -342,6 +342,11 @@ complete original is stored as well.
 | `Storage__Mode` | `Standard` | Fork option: `Lean` archives from the verified original and keeps only index data in the database. Requires `RawMessages__Enabled=true`, `RawMessages__Storage=filesystem`, `RawMessages__FileSystem__HashNamed=true` and `RawMessages__MaxMessageSizeMb=0`; the application refuses to start otherwise. |
 | `RawMessages__FileSystem__VerifyChecksumOnRead` | `true` | Verify the SHA-256 on every download. |
 | `RawMessages__FileSystem__OrphanCleanupEnabled` | `true` | Remove message files that no email refers to. |
+| `RawMessages__OriginalCleanup__Enabled` | `true` | Fork option, **on by default**: the original bin. Hash-named originals that no email refers to are moved to `.bin/` and deleted permanently after `BinRetentionDays`. Does nothing unless originals are hash-named filesystem files (`RawMessages__FileSystem__HashNamed=true`, as in lean mode). Set `false` to switch it off; deleted emails' originals are then never removed. |
+| `RawMessages__OriginalCleanup__BinRetentionDays` | `30` | Days an original stays in the bin (restorable) before it is deleted for good. Minimum 1. |
+| `RawMessages__OriginalCleanup__IntervalHours` | `1` | How often the bin runs. Minimum 1. |
+| `RawMessages__OriginalCleanup__MaxFilesPerRun` | `1000` | Cap on files moved into the bin, and separately on files purged, per run. Minimum 1. |
+| `RawMessages__OriginalCleanup__StartupDelayMinutes` | `15` | Delay before the first scheduled run. |
 | `RawMessages__FileSystem__OrphanCleanupIntervalHours` | `24` | How often that sweep runs. |
 | `RawMessages__FileSystem__OrphanCleanupGraceHours` | `24` | Files younger than this are never removed. |
 
