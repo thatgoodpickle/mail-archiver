@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using SkiaSharp;
+using OrtSessionOptions = Microsoft.ML.OnnxRuntime.SessionOptions;
 
 namespace MailArchiver.Services.Shared
 {
@@ -86,7 +87,7 @@ namespace MailArchiver.Services.Shared
                     if (string.Equals(_options.Mode, "gpu", StringComparison.OrdinalIgnoreCase))
                         _logger.LogWarning("Ocr:Mode=gpu: no GPU image variant is built yet; using the CPU engine");
 
-                    SessionOptions NewOptions() => new()
+                    OrtSessionOptions NewOptions() => new()
                     {
                         IntraOpNumThreads = Math.Clamp(_options.Threads, 1, 16),
                         InterOpNumThreads = 1,
