@@ -129,7 +129,7 @@ public class LeanImportTests : IAsyncLifetime
 
     private static (MimeMessage Message, byte[] Bytes, byte[] Pdf) Mail(bool twoSenders = false, byte[]? pdf = null)
     {
-        pdf ??= Enumerable.Range(0, 4000).Select(i => (byte)(i * 11)).ToArray();
+        pdf ??= System.Security.Cryptography.RandomNumberGenerator.GetBytes(4000); // unique per mail: attachment content rows are shared across tests
         var alt = new MultipartAlternative { new TextPart("plain") { Text = "import plain words" }, new TextPart("html") { Text = "<p>import html</p>" } };
         var mixed = new Multipart("mixed") { alt, new MimePart("application", "pdf")
         {
@@ -231,8 +231,8 @@ public class LeanImportTests : IAsyncLifetime
     // The parsed copy holds one PDF, the stored original another: the attachment cannot be found again.
     private static (MimeMessage Message, byte[] OriginalBytes) Mismatched()
     {
-        var (msg, _, _) = Mail(pdf: Enumerable.Range(0, 3000).Select(i => (byte)(i * 3)).ToArray());
-        var (_, otherBytes, _) = Mail(pdf: Enumerable.Range(0, 3000).Select(i => (byte)(i * 5)).ToArray());
+        var (msg, _, _) = Mail();
+        var (_, otherBytes, _) = Mail();
         return (msg, otherBytes);
     }
 
