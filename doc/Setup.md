@@ -325,6 +325,7 @@ signed records (manifests), shows and restores the Trash for deleted emails' ori
   saved or none. When a pending change lowers a protection (shortening the Trash time, switching the Trash or a schedule off, changing the OCR
   mode), pressing Save opens a dialog that lists exactly what will change and asks for your password; otherwise Save applies straight away. An
   account that signs in with single sign-on cannot confirm such changes and must use the environment variable on the host.
+- **Not available yet: reading with a graphics card (GPU).** The OCR mode offers only Off and On (processor). A GPU build was left out on purpose because the processor is fast enough for a background job and a GPU needs separate images per vendor plus passing the card through to the archive VM. The reasons, and what building it would take, are under "Development: GPU OCR" in `doc/INTEGRITY-DESIGN.md`.
 - **An environment variable pins a setting.** If, for example, `RawMessages__OriginalCleanup__BinRetentionDays` is set, the page shows it
   as locked and ignores any stored value. Remove the variable to edit it on the page again. Values in `appsettings.json` do not pin.
 - Every change is written to the audit chain and the access log, with the old and the new value, before it is applied.

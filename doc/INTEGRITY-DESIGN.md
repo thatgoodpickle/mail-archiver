@@ -291,6 +291,31 @@ photos are untested on real material; the GPU variants (CUDA, ROCm, OpenVINO) ar
 beyond the 90-degree turn of tall crops; the C# engine itself has not been run on the user's real screenshots (parity argument
 above); search remains whole-word/prefix, so OCR misreads of a word make it unfindable.
 
+### Development: GPU OCR (not built, on purpose)
+
+**Status.** There is no GPU build. The settings page offers only `off` and `cpu`. `Ocr__Mode=gpu` is still accepted from the
+environment, but it only logs "no GPU image variant is built yet" and runs the CPU engine, so setting it changes nothing.
+
+**Why it was not developed.**
+- **CPU is fast enough for this job.** OCR runs as a background worker and never blocks archiving or search. The engine measured
+  0.4 to 1.5 s per image on a small shared 2-core build runner. Only attachments without a text layer (scans and photos) need it:
+  10,000 of them would be about 3 hours once, then a few images a day. A GPU only helps a large first backlog. The models are the
+  small "mobile" PP-OCRv5 ones, which gain less from a GPU than large models; no GPU speed was measured, so any speed-up figure is a guess.
+- **It costs more than it returns today.** Each GPU vendor needs its own image (NVIDIA CUDA, AMD ROCm, Intel OpenVINO) with its
+  own driver and runtime, which are bigger, harder to keep updated and cannot be tested in this project's CI (no GPU runners).
+  The only card on hand (a T1000 8 GB) would have to be passed through to the archive VM (IOMMU/VFIO on the Proxmox host, a driver
+  in the VM, a backup and restore test of a VM with passthrough): real work on the production host for a small gain.
+- **More attack surface.** The engine parses untrusted images; a GPU adds driver-level code to that path.
+
+**When to revisit.** After the first real sync, the settings page shows how many attachments are waiting to be read. If that
+backlog needs more than about a day on the CPU, or large volumes of scans are OCRed regularly, measure and decide then.
+
+**What building it would take.** (1) A GPU-capable ONNX Runtime package per vendor, in separate image tags (`-cuda`, `-rocm`,
+`-openvino`) and a `Ocr:Provider` value for each (today only `auto` and `cpu`); (2) detection of an unavailable provider with a
+logged fallback to the CPU; (3) host work to pass the card through, outside this repository; (4) measuring speed and memory against
+the same sample sets (`tools/make-ocr-samples.py`, `tools/score-ocr.py`) so the claim "faster" is a number; (5) putting `gpu` back
+in the settings dropdown only once (1) to (4) are done.
+
 ### Review fixes (2026-11-22): the audit claim, exactly, and what changed
 
 An independent review (REVIEW-opus-2026-11-22.md, 27 findings) found that the checks said more than they

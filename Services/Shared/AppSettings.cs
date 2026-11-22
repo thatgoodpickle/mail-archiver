@@ -163,9 +163,9 @@ namespace MailArchiver.Services.Shared
             new()
             {
                 Key = "Ocr:Mode", Label = "Reading attachments and pictures", Group = SettingGroup.Editable, Kind = SettingKind.Choice,
-                Choices = new[] { "off", "cpu", "gpu" }, Target = typeof(AttachmentTextOptions), Read = b => b.Ocr.Mode.ToLowerInvariant(),
+                Choices = new[] { "off", "cpu" }, Target = typeof(AttachmentTextOptions), Read = b => b.Ocr.Mode.ToLowerInvariant(),
                 Apply = (o, v) => ((AttachmentTextOptions)o).Mode = v,
-                Help = "Off: attachments are not read. On: text is taken from the files, and pictures and scans are read with OCR on the processor. The graphics-card option works like On for now.",
+                Help = "Off: attachments are not read. On: text is taken from the files, and pictures and scans are read with OCR on the processor.",
                 Risky = (old, nw) => old != nw, PasswordRule = "change", RiskyNote = "This changes what can be found by searching, and how busy the server is."
             },
             new()
