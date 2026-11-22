@@ -1,0 +1,66 @@
+# Production stack for the fork (lean storage, originals required, internal network only).
+# Guide: doc/ProductionSetup.md. Do NOT use this file for tests: use compose.lean-test.yml for dummy mail.
+#
+#   sudo mkdir -p /opt/stacks/mail-archive && sudo chown "$USER": /opt/stacks/mail-archive
+#   cd /opt/stacks/mail-archive && mkdir -p originals pgdata logs keys manifests
+#   (create .env as shown in the guide: DB_PASSWORD, ADMIN_PASSWORD, BIND_ADDR, APP_PORT)
+#   docker compose up -d
+#
+# The image is pinned to ONE commit (sha-xxxxxxx), never a moving tag, so an upgrade is a deliberate edit of this line
+# after a backup. Secrets come from .env (the stack refuses to start without them); nothing secret is in this file.
+
+services:
+  mailarchiver:
+    image: ghcr.io/thatgoodpickle/mailarchiver:sha-741adab   # pin: change deliberately, see "Upgrades" in the guide
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:?set BIND_ADDR to the VM's LAN address}:${APP_PORT:-5555}:5000"   # internal only: never 0.0.0.0 unless the firewall limits it
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=postgres;Database=MailArchiver;Username=mailuser;Password=${DB_PASSWORD:?set DB_PASSWORD}"
+      # First login uses this bootstrap password and is forced to choose a new one. Keep the new one in a password manager.
+      Authentication__Username: admin
+      Authentication__Password: "${ADMIN_PASSWORD:?set ADMIN_PASSWORD}"
+      TimeZone__DisplayTimeZoneId: "Australia/Sydney"
+      # Lean storage with a required original: the app refuses to start unless ALL of these are set as shown.
+      Storage__Mode: Lean
+      RawMessages__Enabled: "true"
+      RawMessages__Storage: filesystem
+      RawMessages__FileSystem__BasePath: /data/originals
+      RawMessages__FileSystem__HashNamed: "true"
+      RawMessages__MaxMessageSizeMb: "0"
+      RawMessages__Required: "true"
+      # Gmail allows about 2.5 GB of IMAP download a day; the sync pauses at the limit and resumes by itself.
+      BandwidthTracking__Enabled: "true"
+      BandwidthTracking__DailyLimitMb: "2500"
+      BandwidthTracking__WarningThresholdPercent: "80"
+      BandwidthTracking__PauseHoursOnLimit: "24"
+      # Left OFF on purpose; settings for schedules, the Trash and OCR are set on the Integrity & Storage page, not here
+      # (an environment variable would lock them there). The REST API is off: the page needs no API key.
+      Api__Enabled: "false"
+    volumes:
+      - ./originals:/data/originals       # the evidence: the only full copy of every email
+      - ./logs:/app/logs
+      - ./keys:/app/DataProtection-Keys   # also holds the manifest signing key
+      - ./manifests:/app/Manifests
+    # The image's built-in health check needs an API key (MAILARCHIVER_HEALTH_API_KEY) this stack does not set.
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: MailArchiver
+      POSTGRES_USER: mailuser
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?set DB_PASSWORD}"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailuser -d MailArchiver"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
