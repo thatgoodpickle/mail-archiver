@@ -1,9 +1,23 @@
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 
+# TARGETARCH is set by buildx; OCR_MODELS=skip builds an image without the OCR models (Ocr__Mode must then stay off)
+ARG TARGETARCH
+ARG OCR_MODELS=download
+
 WORKDIR /app
 
 COPY . ./
 RUN dotnet restore MailArchiver.csproj && dotnet publish MailArchiver.csproj -c Release -o out
+
+# Fork: OCR models for the attachment text engine (pinned revisions, SHA-256 checked, about 13 MB).
+RUN if [ "$OCR_MODELS" = "download" ]; then \
+      command -v curl >/dev/null || (apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*); \
+      bash tools/fetch-ocr-models.sh out/ocr-models; \
+    fi
+
+# Keep only the native libraries (ONNX Runtime, SkiaSharp) of the platform being built.
+RUN case "$TARGETARCH" in arm64) keep=linux-arm64 ;; *) keep=linux-x64 ;; esac; \
+    if [ -d out/runtimes ]; then find out/runtimes -mindepth 1 -maxdepth 1 ! -name "$keep" -exec rm -rf {} +; fi
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 

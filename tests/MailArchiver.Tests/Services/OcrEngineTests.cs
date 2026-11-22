@@ -263,9 +263,17 @@ public class OcrQualityTests
     // file -> minimum word recall
     private static readonly (string File, double MinRecall)[] Cases =
     {
-        ("01_clean_print", 0.5), ("03_invoice_table", 0.5), ("04_skewed_4deg", 0.5),
-        ("05_noisy_photo", 0.5), ("06_accents", 0.5), ("09_white_on_dark", 0.5)
+        ("01_clean_print", 0.9), ("03_invoice_table", 0.9), ("04_skewed_4deg", 0.9),
+        ("05_noisy_photo", 0.9), ("06_accents", 0.9), ("09_white_on_dark", 0.9)
     };
+
+    [OcrFact]
+    public async Task ACancelledToken_StopsTheEngine()
+    {
+        using var engine = OcrTestEnv.NewEngine();
+        using var cts = new CancellationTokenSource(); cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.RecognizeAsync(File.ReadAllBytes(OcrTestEnv.Data("01_clean_print.png")), cts.Token));
+    }
 
     [OcrFact]
     public async Task SyntheticImages_AreReadWithKnownAccuracy()
@@ -283,7 +291,9 @@ public class OcrQualityTests
             _out.WriteLine($"OCRSCORE {file}: ok={r.Ok} recall={recall:P1} time={(sw.Elapsed - t0).TotalSeconds:F2}s error={r.Error}");
             if (!r.Ok || recall < min) failures.Add($"{file}: recall {recall:P1} (min {min:P0}) error={r.Error}");
         }
+        var proc = System.Diagnostics.Process.GetCurrentProcess();
         _out.WriteLine($"OCRSCORE mean recall {sum / Cases.Length:P1}; engine {engine.Version}");
+        _out.WriteLine($"OCRSCORE memory: peak working set of the whole test process {proc.PeakWorkingSet64 / (1024 * 1024)} MB, managed heap {GC.GetTotalMemory(false) / (1024 * 1024)} MB");
         Assert.True(failures.Count == 0, string.Join("; ", failures));
     }
 }
