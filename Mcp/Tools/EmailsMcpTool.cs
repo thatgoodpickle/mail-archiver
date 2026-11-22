@@ -69,7 +69,8 @@ public class EmailsMcpTool : McpToolBase
         [Description("Page number, 1-based. Defaults to 1.")] int page = 1,
         [Description("Page size. Clamped to [1, MaxResults]. 0 uses the configured default.")] int pageSize = 0,
         [Description("Sort field: 'sentdate' (default), 'receiveddate', 'subject', 'from', 'to'.")] string? sortBy = null,
-        [Description("Sort order: 'asc' or 'desc' (default).")] string? sortOrder = null)
+        [Description("Sort order: 'asc' or 'desc' (default).")] string? sortOrder = null,
+        [Description("Gmail label filter: an exact label, or '@marketing' for Marketing and its sub-labels. Optional.")] string? label = null)
     {
         page = Math.Max(1, page);
         pageSize = pageSize <= 0 ? _options.DefaultPageSize : pageSize;
@@ -98,7 +99,8 @@ public class EmailsMcpTool : McpToolBase
             pageSize,
             allowed,
             sortBy,
-            sortOrder);
+            sortOrder,
+            string.IsNullOrWhiteSpace(label) ? null : label.Trim());
 
         var result = new PagedResultDto<EmailSummaryDto>
         {

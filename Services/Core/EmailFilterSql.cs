@@ -33,7 +33,8 @@ namespace MailArchiver.Services.Core
             string? folderName,
             bool? isOutgoing,
             List<int>? allowedAccountIds,
-            int startParamIndex = 0)
+            int startParamIndex = 0,
+            string? label = null)
         {
             var whereConditions = new List<string>();
             var parameters = new List<Npgsql.NpgsqlParameter>();
@@ -200,6 +201,21 @@ namespace MailArchiver.Services.Core
                 whereConditions.Add($@"""IsOutgoing"" = @param{paramCounter}");
                 parameters.Add(new Npgsql.NpgsqlParameter($"@param{paramCounter}", isOutgoing.Value));
                 paramCounter++;
+            }
+
+            // Fork (Gmail labels): "@marketing" = tagged Marketing or any sub-label of it; anything else is one exact label.
+            if (!string.IsNullOrWhiteSpace(label))
+            {
+                if (string.Equals(label.Trim(), "@marketing", StringComparison.OrdinalIgnoreCase))
+                {
+                    whereConditions.Add(@"EXISTS (SELECT 1 FROM unnest(""Labels"") AS lbl WHERE lower(lbl) = 'marketing' OR lower(lbl) LIKE 'marketing/%')");
+                }
+                else
+                {
+                    whereConditions.Add($@"""Labels"" @> ARRAY[@param{paramCounter}]::text[]");
+                    parameters.Add(new Npgsql.NpgsqlParameter($"@param{paramCounter}", label.Trim()));
+                    paramCounter++;
+                }
             }
 
             // Folder filtering: selecting a folder also shows the emails of all descendant

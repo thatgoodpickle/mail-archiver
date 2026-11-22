@@ -10,6 +10,13 @@ namespace MailArchiver.Models.ViewModels
         public int? SelectedAccountId { get; set; }
         public string SelectedFolder { get; set; }
         public bool? IsOutgoing { get; set; }
+
+        /// <summary>Gmail label filter: an exact label, or "@marketing" for Marketing and its sub-labels.</summary>
+        public string? Label { get; set; }
+
+        /// <summary>Labels in use with how many emails carry each (for the label chips), and how many are tagged Marketing.</summary>
+        public List<LabelCount> LabelCounts { get; set; } = new();
+        public int TaggedMarketingCount { get; set; }
         public int PageNumber { get; set; } = 1;
         public int PageSize { get; set; } = 20;
         public string UserTimezone { get; set; } = "UTC";
@@ -64,5 +71,12 @@ namespace MailArchiver.Models.ViewModels
         // Für die Batch-Operationen
         public List<int> SelectedEmailIds { get; set; } = new List<int>();
         public bool ShowSelectionControls { get; set; } = false;
+    }
+
+    /// <summary>One Gmail label and how many emails carry it.</summary>
+    public class LabelCount
+    {
+        public string Label { get; set; } = string.Empty;
+        public int Count { get; set; }
     }
 }

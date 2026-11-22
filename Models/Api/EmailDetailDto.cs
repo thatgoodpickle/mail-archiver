@@ -11,6 +11,10 @@ public class EmailDetailDto
     public string To { get; set; } = string.Empty;
     public DateTime SentDate { get; set; }
     public bool IsOutgoing { get; set; }
+
+    /// <summary>Gmail labels as of the last sync (null for non-Gmail mail). Metadata about the email, not part of the stored original.</summary>
+    public List<string>? Labels { get; set; }
+    public string? GmailMessageId { get; set; }
     public bool HasAttachments { get; set; }
     public string FolderName { get; set; } = string.Empty;
     public string Cc { get; set; } = string.Empty;
@@ -35,6 +39,8 @@ public class EmailDetailDto
             To = e.To,
             SentDate = e.SentDate,
             IsOutgoing = e.IsOutgoing,
+            Labels = e.Labels,
+            GmailMessageId = e.GmailMessageId,
             HasAttachments = e.HasAttachments,
             FolderName = e.FolderName,
             Cc = e.Cc,

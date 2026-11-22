@@ -107,7 +107,8 @@ namespace MailArchiver.Services.Core
                 filter.AccountId,
                 filter.FolderName,
                 filter.IsOutgoing,
-                filter.AllowedAccountIds);
+                filter.AllowedAccountIds,
+                label: filter.Label);
 
         private static async Task<DbCommand> CreateCommandAsync(
             MailArchiverDbContext context,

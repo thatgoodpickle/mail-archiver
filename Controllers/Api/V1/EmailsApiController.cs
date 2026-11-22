@@ -60,7 +60,8 @@ public class EmailsApiController : ApiControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 0,
         [FromQuery] string? sortBy = null,
-        [FromQuery] string? sortOrder = null)
+        [FromQuery] string? sortOrder = null,
+        [FromQuery] string? label = null)
     {
         page = Math.Max(1, page);
         pageSize = pageSize <= 0 ? _options.DefaultPageSize : pageSize;
@@ -95,7 +96,8 @@ public class EmailsApiController : ApiControllerBase
             pageSize,
             allowed,
             sortBy,
-            sortOrder);
+            sortOrder,
+            string.IsNullOrWhiteSpace(label) ? null : label.Trim());
 
         var result = new PagedResultDto<EmailSummaryDto>
         {

@@ -1,4 +1,4 @@
-﻿@using Microsoft.AspNetCore.Http.Extensions
+@using Microsoft.AspNetCore.Http.Extensions
 @using MailArchiver.Services.Shared
 @inject Microsoft.Extensions.Localization.IStringLocalizer<MailArchiver.SharedResource> Localizer
 @model MailArchiver.Models.ViewModels.EmailDetailViewModel
@@ -121,6 +121,26 @@
                     <span class="badge bg-light text-dark border">@Model.AccountName</span>
                 </div>
             </div>
+
+            @if (Model.Email.Labels != null && Model.Email.Labels.Count > 0)
+            {
+                <div class="row g-2 mb-2">
+                    <div class="col-12 col-md-2">
+                        <strong class="text-muted small">Gmail labels:</strong>
+                    </div>
+                    <div class="col-12 col-md-10">
+                        @foreach (var gl in Model.Email.Labels.OrderBy(l => l))
+                        {
+                            <a class="badge bg-light text-dark border text-decoration-none me-1" href="@Url.Action("Index", new { SelectedAccountId = Model.Email.MailAccountId, Label = gl })">@(gl.StartsWith("\\") ? gl.Substring(1) : gl)</a>
+                        }
+                        @if (MailArchiver.Services.Shared.GmailLabels.IsMarketing(Model.Email.Labels))
+                        {
+                            <span class="badge text-bg-secondary" title="This email was archived before it was tagged Marketing in Gmail. It is kept until you delete it.">tagged Marketing</span>
+                        }
+                        <div class="small text-muted">As of @(Model.Email.LabelsCapturedAt?.ToString("yyyy-MM-dd HH:mm") ?? "?") UTC. Labels are Gmail's own information about the message, not part of the stored original.</div>
+                    </div>
+                </div>
+            }
 
             @if (!string.IsNullOrEmpty(Model.Email.FolderName))
             {

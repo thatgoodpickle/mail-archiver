@@ -91,7 +91,8 @@ namespace MailArchiver.Services.Core
             int take,
             List<int> allowedAccountIds = null,
             string sortBy = "SentDate",
-            string sortOrder = "desc")
+            string sortOrder = "desc",
+            string? label = null)
         {
             var startTime = DateTime.UtcNow;
 
@@ -109,9 +110,9 @@ namespace MailArchiver.Services.Core
 
             try
             {
-                return await SearchEmailsOptimizedAsync(searchTerm, fromDate, toDate, accountId, folderName, isOutgoing, skip, take, allowedAccountIds, sortBy, sortOrder);
+                return await SearchEmailsOptimizedAsync(searchTerm, fromDate, toDate, accountId, folderName, isOutgoing, skip, take, allowedAccountIds, sortBy, sortOrder, label);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (string.IsNullOrWhiteSpace(label))   // the fallback search has no label filter: it must not silently ignore one
             {
                 _logger.LogError(ex, "Optimized search failed, falling back to Entity Framework search");
                 return await SearchEmailsEFAsync(searchTerm, fromDate, toDate, accountId, folderName, isOutgoing, skip, take, allowedAccountIds);
@@ -134,14 +135,15 @@ namespace MailArchiver.Services.Core
             int limit,
             List<int> allowedAccountIds = null,
             string sortBy = "SentDate",
-            string sortOrder = "desc")
+            string sortOrder = "desc",
+            string? label = null)
         {
             if (limit < 0) limit = 0;
             sortBy = CanonicalizeSortBy(sortBy);
             sortOrder = CanonicalizeSortOrder(sortOrder);
 
             var clause = EmailFilterSql.Build(
-                searchTerm, fromDate, toDate, accountId, folderName, isOutgoing, allowedAccountIds);
+                searchTerm, fromDate, toDate, accountId, folderName, isOutgoing, allowedAccountIds, label: label);
             if (clause.MatchesNothing)
             {
                 _logger.LogWarning("{Reason}", clause.NoMatchReason);
@@ -202,11 +204,12 @@ namespace MailArchiver.Services.Core
             int take,
             List<int> allowedAccountIds = null,
             string sortBy = "SentDate",
-            string sortOrder = "desc")
+            string sortOrder = "desc",
+            string? label = null)
         {
             var startTime = DateTime.UtcNow;
             var clause = EmailFilterSql.Build(
-                searchTerm, fromDate, toDate, accountId, folderName, isOutgoing, allowedAccountIds);
+                searchTerm, fromDate, toDate, accountId, folderName, isOutgoing, allowedAccountIds, label: label);
             if (clause.MatchesNothing)
             {
                 _logger.LogWarning("{Reason}", clause.NoMatchReason);

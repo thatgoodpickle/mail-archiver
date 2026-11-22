@@ -93,6 +93,26 @@ namespace MailArchiver.Controllers
             _rawMessageStore = rawMessageStore;
         }
 
+        /// <summary>The Gmail labels in use (with counts) for the label chips, and how many emails are tagged Marketing. Scoped to what the user may see.</summary>
+        private async Task LoadLabelCountsAsync(SearchViewModel model, List<int>? allowedAccountIds)
+        {
+            try
+            {
+                var accountFilter = new List<string>(); var ps = new List<Npgsql.NpgsqlParameter>();
+                if (model.SelectedAccountId.HasValue) { accountFilter.Add(@"""MailAccountId"" = @acc"); ps.Add(new Npgsql.NpgsqlParameter("@acc", model.SelectedAccountId.Value)); }
+                if (allowedAccountIds != null) { accountFilter.Add(@"""MailAccountId"" = ANY(@allowed)"); ps.Add(new Npgsql.NpgsqlParameter("@allowed", allowedAccountIds.ToArray())); }
+                var where = accountFilter.Count == 0 ? "" : "AND " + string.Join(" AND ", accountFilter);
+                model.LabelCounts = await _context.Database.SqlQueryRaw<LabelCount>(
+                    $@"SELECT lbl AS ""Label"", COUNT(*)::int AS ""Count"" FROM mail_archiver.""ArchivedEmails"", unnest(""Labels"") AS lbl
+                       WHERE ""Labels"" IS NOT NULL {where} GROUP BY lbl ORDER BY COUNT(*) DESC, lbl LIMIT 80", ps.ToArray()).ToListAsync();
+                var ps2 = ps.Select(p => new Npgsql.NpgsqlParameter(p.ParameterName, p.Value)).ToArray();
+                model.TaggedMarketingCount = await _context.Database.SqlQueryRaw<int>(
+                    $@"SELECT COUNT(*)::int AS ""Value"" FROM mail_archiver.""ArchivedEmails""
+                       WHERE EXISTS (SELECT 1 FROM unnest(""Labels"") AS lbl WHERE lower(lbl) = 'marketing' OR lower(lbl) LIKE 'marketing/%') {where}", ps2).SingleAsync();
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "Could not load the Gmail label counts"); }
+        }
+
         // GET: Emails
         public async Task<IActionResult> Index(SearchViewModel model)
         {
@@ -188,6 +208,7 @@ namespace MailArchiver.Controllers
 
             // Load folder tree for the selected account (or all accounts if none selected)
             model.FolderTree = await _emailCoreService.GetFolderTreeAsync(model.SelectedAccountId, allowedAccountIds);
+            await LoadLabelCountsAsync(model, allowedAccountIds);
 
             // For non-admin users, we need to ensure they only see emails from their assigned accounts
             // If they haven't selected a specific account, we still need to filter by their allowed accounts
@@ -206,7 +227,8 @@ namespace MailArchiver.Controllers
                     model.PageSize,
                     allowedAccountIds,
                     model.SortBy ?? "SentDate",
-                    model.SortOrder ?? "desc");
+                    model.SortOrder ?? "desc",
+                    string.IsNullOrWhiteSpace(model.Label) ? null : model.Label);
             }
 
             // Suche durchführen
@@ -316,7 +338,8 @@ namespace MailArchiver.Controllers
                 _selectionOptions.MaxSelectableEmails,
                 allowedAccountIds,
                 model.SortBy ?? "SentDate",
-                model.SortOrder ?? "desc");
+                model.SortOrder ?? "desc",
+                string.IsNullOrWhiteSpace(model.Label) ? null : model.Label);
 
             return Json(new { ids, totalCount, truncated = totalCount > ids.Count });
         }
@@ -535,6 +558,7 @@ namespace MailArchiver.Controllers
                     ToDate = searchModel.ToDate?.ToString("yyyy-MM-dd"),
                     SelectedAccountId = searchModel.SelectedAccountId,
                     SelectedFolder = searchModel.SelectedFolder,
+                    Label = searchModel.Label,
                     IsOutgoing = searchModel.IsOutgoing,
                     PageNumber = searchModel.PageNumber,
                     PageSize = searchModel.PageSize,
@@ -3439,6 +3463,7 @@ namespace MailArchiver.Controllers
                || model.FromDate.HasValue
                || model.ToDate.HasValue
                || model.SelectedAccountId.HasValue
+               || !string.IsNullOrWhiteSpace(model.Label)
                || !string.IsNullOrWhiteSpace(model.SelectedFolder);
 
         private static EmailDeletionFilter BuildDeletionFilter(SearchViewModel model, List<int>? allowedAccountIds)
@@ -3450,6 +3475,7 @@ namespace MailArchiver.Controllers
                 AccountId = model.SelectedAccountId,
                 FolderName = string.IsNullOrWhiteSpace(model.SelectedFolder) ? null : model.SelectedFolder,
                 IsOutgoing = model.IsOutgoing,
+                Label = string.IsNullOrWhiteSpace(model.Label) ? null : model.Label.Trim(),
                 AllowedAccountIds = allowedAccountIds
             };
 
@@ -3466,6 +3492,8 @@ namespace MailArchiver.Controllers
                 parts.Add($"account:{model.SelectedAccountId}");
             if (!string.IsNullOrWhiteSpace(model.SelectedFolder))
                 parts.Add($"folder:{model.SelectedFolder}");
+            if (!string.IsNullOrWhiteSpace(model.Label))
+                parts.Add($"label:{model.Label}");
             if (model.IsOutgoing.HasValue)
                 parts.Add($"direction:{(model.IsOutgoing.Value ? "out" : "in")}");
             return string.Join(", ", parts);

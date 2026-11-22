@@ -13,6 +13,9 @@ namespace MailArchiver.Models
         public int? AccountId { get; set; }
         public string? FolderName { get; set; }
         public bool? IsOutgoing { get; set; }
+
+        /// <summary>Gmail label filter (an exact label, or "@marketing" for Marketing and its sub-labels).</summary>
+        public string? Label { get; set; }
         public List<int>? AllowedAccountIds { get; set; }
 
         /// <summary>
