@@ -196,4 +196,19 @@ public class ManifestServiceTests : IAsyncLifetime
         using var _ = db;
         Assert.Null(await svc.VerifyAsync(name));
     }
+
+    [Fact]
+    public async Task PublicKeyFingerprint_IsNullBeforeTheFirstManifest_ThenTheHashOfTheDerKey()
+    {
+        var (svc, db) = NewService();
+        using var _ = db;
+        Assert.Null(svc.GetPublicKeyFingerprint());
+
+        await svc.CreateAsync("test");
+        var fp = svc.GetPublicKeyFingerprint();
+
+        using var pub = ECDsa.Create();
+        pub.ImportFromPem(File.ReadAllText(Path.Combine(_dir, "public-key.pem")));
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(pub.ExportSubjectPublicKeyInfo())).ToLowerInvariant(), fp);
+    }
 }

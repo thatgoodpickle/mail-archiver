@@ -71,6 +71,34 @@ public class IntegrityApiController : ApiControllerBase
         return head == null ? Ok(new { entries = 0, head = (object?)null }) : Ok(new { seq = head.Seq, hash = head.Hash, timestamp = head.Timestamp });
     }
 
+    /// <summary>
+    /// The chain head as one plain-text line, made to be collected by a machine the archive host cannot
+    /// reach (see tools/pull-anchor.sh): <c>time seq=N hash=H pubkey=F</c>. <c>pubkey</c> is the SHA-256 of the
+    /// manifest public key, or "-" before the first manifest. "seq=0 hash=0...0" when nothing is chained yet.
+    /// </summary>
+    [HttpGet("chain/anchor")]
+    [Produces("text/plain")]
+    public async Task<IActionResult> ChainAnchor()
+    {
+        if (_chain == null) return Problem(statusCode: 501, title: "The audit chain is not available.");
+        var head = await _chain.GetHeadAsync();
+        var fp = _manifests?.GetPublicKeyFingerprint() ?? "-";
+        var line = $"{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ssZ} seq={head?.Seq ?? 0} hash={head?.Hash ?? AuditChainEntry.GenesisHash} pubkey={fp}\n";
+        return Content(line, "text/plain");
+    }
+
+    /// <summary>
+    /// The hash of one chain entry. A collector that stored an earlier head compares it here: a rewritten
+    /// chain can verify perfectly on its own and still hold a different hash at an old sequence number.
+    /// </summary>
+    [HttpGet("chain/entries/{seq:long}")]
+    public async Task<IActionResult> ChainEntry(long seq)
+    {
+        var e = await _context.AuditChain.AsNoTracking().Where(x => x.Seq == seq)
+            .Select(x => new { seq = x.Seq, hash = x.EntryHash, timestamp = x.Timestamp }).FirstOrDefaultAsync();
+        return e == null ? NotFound() : Ok(e);
+    }
+
     /// <summary>Walks the whole chain and reports the first break, hash changes and unchained emails.</summary>
     [HttpGet("chain/verify")]
     public async Task<IActionResult> ChainVerify()

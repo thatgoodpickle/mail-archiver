@@ -26,6 +26,9 @@ namespace MailArchiver.Services.Shared
         Task<ManifestInfo> CreateAsync(string? requestedBy, CancellationToken cancellationToken = default);
         Task<IReadOnlyList<ManifestInfo>> ListAsync(int limit = 50);
         Task<ManifestCheck?> VerifyAsync(string name, CancellationToken cancellationToken = default);
+
+        /// <summary>SHA-256 of the DER public key (as in public-key.pem), or null when no key exists yet.</summary>
+        string? GetPublicKeyFingerprint();
     }
 
     /// <summary>
@@ -141,6 +144,14 @@ namespace MailArchiver.Services.Shared
                 }
             }
             finally { Gate.Release(); }
+        }
+
+        public string? GetPublicKeyFingerprint()
+        {
+            if (!File.Exists(PublicKeyPath)) return null;
+            using var key = ECDsa.Create();
+            key.ImportFromPem(File.ReadAllText(PublicKeyPath));
+            return Convert.ToHexString(SHA256.HashData(key.ExportSubjectPublicKeyInfo())).ToLowerInvariant();
         }
 
         public Task<IReadOnlyList<ManifestInfo>> ListAsync(int limit = 50)
