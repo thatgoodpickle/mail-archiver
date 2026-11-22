@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Scores OCR output against the known text made by tools/make-ocr-samples.py.
 
-Usage: score-ocr.py <samples-dir> <ocr-output-dir>
+Usage: score-ocr.py [--ignore-missing] <samples-dir> <ocr-output-dir>
 For each <name>.txt (truth) in the samples dir, reads <name>.txt from the output dir (what the engine returned)
 and prints: CER (character error rate), WER (word error rate), number recall (share of the digit-containing
 tokens, such as prices and dates, that came out exactly) and word recall (share of the expected words found,
 ignoring order: the fair measure for multi-column layouts and screenshots, where reading order is ambiguous). Whitespace and line breaks are ignored; case, accents
 and punctuation count. Lower CER/WER is better; number recall 100% is what matters most for invoices.
+--ignore-missing leaves out cases for which the engine wrote no output file (use it for image-only engines, which
+cannot read the scan PDF); without it a missing output counts as everything wrong.
 Python 3 standard library only.
 """
 import os, re, sys
@@ -24,13 +26,17 @@ def lev(a, b):
     return prev[-1]
 
 def main():
-    if len(sys.argv) != 3: sys.exit(__doc__)
-    sd, od = sys.argv[1], sys.argv[2]
+    args = [a for a in sys.argv[1:] if a != "--ignore-missing"]
+    ignore = len(args) != len(sys.argv) - 1
+    if len(args) != 2: sys.exit(__doc__)
+    sd, od = args
     rows, tot = [], [0, 0, 0, 0, 0, 0, 0, 0]
     for f in sorted(os.listdir(sd)):
         if not f.endswith(".txt"): continue
         truth = norm(open(os.path.join(sd, f), encoding="utf-8").read())
         op = os.path.join(od, f)
+        if ignore and not os.path.exists(op):
+            continue
         got = norm(open(op, encoding="utf-8").read()) if os.path.exists(op) else ""
         ce = lev(truth, got); we = lev(truth.split(), got.split())
         nums = [w for w in truth.split() if re.search(r"\d", w)]
