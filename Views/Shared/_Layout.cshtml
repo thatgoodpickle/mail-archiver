@@ -75,6 +75,13 @@
                                     <i class="bi bi-people me-1"></i>@Localizer["Users"]
                                 </a>
                             </li>
+                            @* Fork: admin-only Integrity & Storage page *@
+                            <li class="nav-item">
+                                <a class="nav-link @(ViewContext.RouteData.Values["Controller"].ToString() == "IntegrityStorage" ? "active" : "")"
+                                    asp-controller="IntegrityStorage" asp-action="Index">
+                                    <i class="bi bi-shield-check me-1"></i>@Localizer["Integrity & Storage"]
+                                </a>
+                            </li>
                         }
                         @if (AuthService.IsCurrentUserAdmin(Context))
                         {
