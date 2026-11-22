@@ -449,10 +449,12 @@ namespace MailArchiver.Services.Shared
             x.C.Scanned = live.Count;
             if (live.Count == 0) return;
 
-            // Second review N-01(d): an empty database next to a full folder is never a deletion.
-            if (!await x.Db.RawMessages.AsNoTracking().AnyAsync(ct))
+            // Second review N-01(d): an empty database next to a full folder is never a deletion. (A database whose last emails were
+            // legitimately deleted has no rows either, but its chain still shows originals stored and emails deleted.)
+            if (!await x.Db.RawMessages.AsNoTracking().AnyAsync(ct)
+                && !await x.Db.AuditChain.AsNoTracking().AnyAsync(c => c.Kind == "original.stored" || c.Kind == "email.deleted", ct))
             {
-                x.C.Alarm = $"The database holds no stored originals but the originals folder holds {live.Count}. This looks like an empty or wrong database, so nothing was moved.";
+                x.C.Alarm = $"The database holds no stored originals and no history of any, but the originals folder holds {live.Count}. This looks like an empty or wrong database, so nothing was moved.";
                 _logger.LogError("Original Trash refused: {Alarm}", x.C.Alarm);
                 return;
             }

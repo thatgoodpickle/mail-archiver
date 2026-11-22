@@ -97,7 +97,32 @@ public class OriginalBinTests : IAsyncLifetime
         DELETE FROM mail_archiver.""OriginalBinEntries"";
         DELETE FROM mail_archiver.""OriginalCleanupRuns"";");
 
-    public async Task InitializeAsync() { Directory.CreateDirectory(_root); await ResetAsync(); }
+    public async Task InitializeAsync()
+    {
+        Directory.CreateDirectory(_root); await ResetAsync();
+        await AdoptIdentityAsync();   // the archive and its originals folder belong together, as in a normal installation
+    }
+
+    private async Task AdoptIdentityAsync()
+    {
+        await using var c = NewContext();
+        await new ArchiveIdentityService(c).AdoptAsync(Path.GetFullPath(_root));
+    }
+
+    /// <summary>Records a delete request for an original, the way the database trigger does when an email row is deleted.</summary>
+    private async Task DeleteRequestAsync(string sha, int emailId = 1)
+    {
+        var services = new ServiceCollection(); services.AddScoped(_ => NewContext());
+        var chain = new AuditChain(services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(), Opt.Create(new IntegrityOptions()), NullLogger<AuditChain>.Instance);
+        await chain.AppendAsync("email.deleted", emailId, sha, new { test = true });
+    }
+
+    private async Task<(string Sha, string Rel)> WriteOriginalAsync(bool aged = true, bool deleteRequest = true)
+    {
+        var f = WriteOriginal(aged);
+        if (deleteRequest) await DeleteRequestAsync(f.Sha);
+        return f;
+    }
 
     public async Task DisposeAsync()
     {
@@ -201,7 +226,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task AnUnreferencedOriginal_IsMovedToTheBin_NotDeleted_AndRecorded()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var bin = NewBin(Raw());
 
         var run = await bin.RunOnceAsync("test");
@@ -220,7 +245,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task AReferencedOriginal_Stays()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         await AddEmailWithRowAsync(sha, rel);
 
         var run = await NewBin(Raw()).RunOnceAsync("test");
@@ -233,7 +258,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task ASharedOriginal_StaysWhileAnyRowRemains_ThenGoesToTheBin()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var a = await AddEmailWithRowAsync(sha, rel);
         var b = await AddEmailWithRowAsync(sha, rel);
         var bin = NewBin(Raw());
@@ -251,7 +276,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task ARecentlyWrittenFile_IsLeftAlone()
     {
-        var (_, rel) = WriteOriginal(aged: false);
+        var (_, rel) = await WriteOriginalAsync(aged: false);
         var run = await NewBin(Raw()).RunOnceAsync("test");
         Assert.Equal(0, run.Binned);
         Assert.Equal(1, run.Deferred);
@@ -261,7 +286,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task AFileThatBecomesReferencedAgain_IsMovedBackFromTheBin()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var bin = NewBin(Raw());
         await bin.RunOnceAsync("t");
         Assert.False(File.Exists(Abs(rel)));
@@ -279,7 +304,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task WhenTheBytesWereWrittenAgain_TheBinCopyIsJustADuplicate()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var bin = NewBin(Raw());
         await bin.RunOnceAsync("t");
         // a new ingest of the same bytes wrote a fresh live file
@@ -298,7 +323,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task APurge_NeedsTheFullRetention_AndLeavesARecord()
     {
-        var (sha, _) = WriteOriginal();
+        var (sha, _) = await WriteOriginalAsync();
         var bin = NewBin(Raw());
         await bin.RunOnceAsync("t");
 
@@ -319,7 +344,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task OldBinEntry_ThatIsReferencedAgain_IsRestoredNotPurged()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var bin = NewBin(Raw());
         await bin.RunOnceAsync("t");
         await BackdateBinnedAsync(sha, 40);
@@ -342,7 +367,7 @@ public class OriginalBinTests : IAsyncLifetime
     public async Task NoMoveWithoutItsChainRecord_AndNoPurgeWithoutOne()
     {
         // Moving: the chain cannot record it, so the file stays where it is.
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var failing = NewBin(Raw(), chainOn: true, chainOverride: new FailingChain());
         var run = await failing.RunOnceAsync("t");
         Assert.Equal(0, run.Binned);
@@ -366,7 +391,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task MaxFilesPerRun_CapsTheMoves()
     {
-        var files = Enumerable.Range(0, 3).Select(_ => WriteOriginal()).ToList();
+        var files = new List<(string Sha, string Rel)>(); for (var i = 0; i < 3; i++) files.Add(await WriteOriginalAsync());
         var bin = NewBin(Raw(o => o.MaxFilesPerRun = 2));
 
         var run = await bin.RunOnceAsync("t");
@@ -400,7 +425,7 @@ public class OriginalBinTests : IAsyncLifetime
         File.WriteAllBytes(outside, new byte[] { 1, 2, 3 });
         try
         {
-            var (sha, rel) = WriteOriginal();
+            var (sha, rel) = await WriteOriginalAsync();
             File.Delete(Abs(rel));
             File.CreateSymbolicLink(Abs(rel), outside);
 
@@ -425,7 +450,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task Disabled_StartsNothing_AndMovesNothing()
     {
-        var (_, rel) = WriteOriginal();
+        var (_, rel) = await WriteOriginalAsync();
         var bin = NewBin(Raw(o => o.Enabled = false));
         await Assert.ThrowsAsync<InvalidOperationException>(() => bin.StartAsync("t"));
         Assert.True(File.Exists(Abs(rel)));
@@ -445,7 +470,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task TwoStarts_NeverRunAtTheSameTime()
     {
-        for (var i = 0; i < 20; i++) WriteOriginal();
+        for (var i = 0; i < 20; i++) await WriteOriginalAsync();
         var bin = NewBin(Raw());
 
         var runs = await Task.WhenAll(bin.StartAsync("a"), bin.StartAsync("b"));
@@ -463,11 +488,11 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task TheOldOrphanCollector_LeavesHashNamedFilesAndTheBinAlone()
     {
-        var (sha, rel) = WriteOriginal();
-        var (sha2, rel2) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
+        var (sha2, rel2) = await WriteOriginalAsync();
         var bin = NewBin(Raw());
         await bin.RunOnceAsync("t");   // both binned
-        var (_, rel3) = WriteOriginal(); // a live hash-named one
+        var (_, rel3) = await WriteOriginalAsync(); // a live hash-named one
 
         await using var db = NewContext();
         var raw = Raw();
@@ -482,7 +507,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task ChainVerify_CountsTheBinEvents_AndFlagsARowThatReferencesABinnedOriginal()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var bin = NewBin(Raw());
         await bin.RunOnceAsync("t");
         await BackdateBinnedAsync(sha, 40);
@@ -509,7 +534,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task ADeletedEmail_WhoseOriginalWasBinnedAndPurged_IsNotAFindingForTheChainOrTheManifest()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var id = await AddEmailWithRowAsync(sha, rel);
         var mfDir = Path.Combine(Path.GetTempPath(), "mf-" + Guid.NewGuid().ToString("N"));
         var integrity = Opt.Create(new IntegrityOptions { ManifestPath = mfDir, ManifestKeyPath = Path.Combine(mfDir, "keys", "k.pem"), AuditChainEnabled = true });
@@ -538,7 +563,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task Restore_ByHash_BringsItBack_AndKeepsItLiveForADay()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var bin = NewBin(Raw());
         await bin.RunOnceAsync("t");
 
@@ -555,7 +580,7 @@ public class OriginalBinTests : IAsyncLifetime
     [Fact]
     public async Task Describe_TellsWhereADeletedEmailsOriginalIs_AndChangesNothing()
     {
-        var (sha, rel) = WriteOriginal();
+        var (sha, rel) = await WriteOriginalAsync();
         var a = await AddEmailWithRowAsync(sha, rel);
         var b = await AddEmailWithRowAsync(sha, rel);
         var bin = NewBin(Raw());
@@ -571,5 +596,285 @@ public class OriginalBinTests : IAsyncLifetime
         Assert.True(inBin.PurgeAfter > DateTime.UtcNow.AddDays(29));
         Assert.True(File.Exists(Abs(OriginalBin.BinRel(sha))));      // describing moved nothing
         Assert.Equal("NoDeletionRecord", (await bin.DescribeEmailAsync(int.MaxValue)).State);
+    }
+
+    // ===== second review N-01: the Trash needs proof =======================================================
+
+    [Fact]
+    public async Task AnOriginalWithNoDeleteRequest_IsNeverMovedByARun_ButIsListed_AndCanBeMovedByAnAdmin()
+    {
+        var (shaA, relA) = await WriteOriginalAsync(deleteRequest: false);   // unreferenced, and nobody ever asked to delete it
+        var (shaB, relB) = await WriteOriginalAsync();                       // deleted on purpose
+        var bin = NewBin(Raw());
+
+        var run = await bin.RunOnceAsync("t");
+
+        Assert.Equal(1, run.Binned);
+        Assert.Equal(1, run.Unclaimed);
+        Assert.True(File.Exists(Abs(relA)));                    // untouched
+        Assert.False(File.Exists(Abs(relB)));
+        var listed = Assert.Single(await bin.ListUnclaimedAsync(50));
+        Assert.Equal(shaA, listed.Sha256);
+
+        var moved = await bin.MoveToTrashAsync(shaA, "admin");
+        Assert.True(moved.Restored, moved.Message);
+        Assert.False(File.Exists(Abs(relA)));
+        Assert.True(File.Exists(Abs(OriginalBin.BinRel(shaA))));
+        Assert.Contains(await ChainAsync("original.binned"), e => e.Sha256 == shaA);
+        Assert.Empty(await bin.ListUnclaimedAsync(50));
+    }
+
+    [Fact]
+    public async Task AnAdminCannotMoveAReferencedOriginal()
+    {
+        var (sha, rel) = await WriteOriginalAsync(deleteRequest: false);
+        await AddEmailWithRowAsync(sha, rel);
+        var r = await NewBin(Raw()).MoveToTrashAsync(sha, "admin");
+        Assert.False(r.Restored);
+        Assert.True(File.Exists(Abs(rel)));
+    }
+
+    [Fact]
+    public async Task AnEmptyOrWrongDatabase_NextToAFullFolder_MovesNothing()
+    {
+        var files = new List<(string Sha, string Rel)>();
+        for (var i = 0; i < 3; i++) files.Add(WriteOriginal());       // originals, aged, but this database knows nothing of them
+        await ExecAsync(@"ALTER TABLE mail_archiver.""AuditChain"" DISABLE TRIGGER USER; DELETE FROM mail_archiver.""AuditChain""; ALTER TABLE mail_archiver.""AuditChain"" ENABLE TRIGGER USER;
+                           DELETE FROM mail_archiver.""ArchiveIdentity"";");   // a different, empty database: no identity, no history
+
+        var run = await NewBin(Raw()).RunOnceAsync("t");
+
+        Assert.Equal(OriginalCleanupRun.Refused, run.Status);
+        Assert.False(string.IsNullOrEmpty(run.Alarm));
+        Assert.Equal(0, run.Binned);
+        Assert.All(files, f => Assert.True(File.Exists(Abs(f.Rel))));
+        Assert.Equal(0, await BinEntriesAsync());
+    }
+
+    [Fact]
+    public async Task ADatabaseWithAnotherIdentityThanTheFolder_MovesNothing_EvenWithDeleteRequests()
+    {
+        var (_, rel) = await WriteOriginalAsync();
+        File.WriteAllText(Path.Combine(_root, ArchiveIdentityService.MarkerFile), Guid.NewGuid().ToString("D"));
+
+        var bin = NewBin(Raw());
+        var run = await bin.RunOnceAsync("t");
+
+        Assert.Equal(OriginalCleanupRun.Refused, run.Status);
+        Assert.True(File.Exists(Abs(rel)));
+        var id = await bin.GetIdentityAsync();
+        Assert.False(id.Ok); Assert.Equal(ArchiveIdentityCheck.Mismatch, id.Code);
+        Assert.False((await bin.MoveToTrashAsync(WriteOriginal().Sha, "admin")).Restored);   // the manual move refuses too
+    }
+
+    [Fact]
+    public async Task AFolderWithoutItsMarker_IsRefusedUntilAnAdministratorAdoptsIt()
+    {
+        var (_, rel) = await WriteOriginalAsync();
+        File.Delete(Path.Combine(_root, ArchiveIdentityService.MarkerFile));
+        var bin = NewBin(Raw());
+
+        var refused = await bin.RunOnceAsync("t");
+        Assert.Equal(OriginalCleanupRun.Refused, refused.Status);
+        Assert.True(File.Exists(Abs(rel)));
+        Assert.Equal(ArchiveIdentityCheck.MarkerMissing, (await bin.GetIdentityAsync()).Code);
+
+        var adopted = await bin.AdoptAsync("admin");
+        Assert.True(adopted.Ok);
+        Assert.Contains(await ChainAsync("archive.identity.adopted"), e => e.Payload.Contains("admin"));
+
+        var run = await bin.RunOnceAsync("t");
+        Assert.Equal(OriginalCleanupRun.Completed, run.Status);
+        Assert.Equal(1, run.Binned);
+    }
+
+    [Fact]
+    public async Task AFreshArchive_GetsItsIdentityAndMarker()
+    {
+        await ResetAsync();
+        var fresh = Path.Combine(Path.GetTempPath(), "fresh-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await using var c = NewContext();
+            var check = await new ArchiveIdentityService(c).CheckAsync(fresh);
+            Assert.True(check.Ok);
+            Assert.Equal(ArchiveIdentityCheck.Created, check.Code);
+            Assert.Equal(check.DatabaseId, File.ReadAllText(Path.Combine(fresh, ArchiveIdentityService.MarkerFile)).Trim());
+            Assert.Equal(ArchiveIdentityCheck.Matches, (await new ArchiveIdentityService(c).CheckAsync(fresh)).Code);
+        }
+        finally { try { Directory.Delete(fresh, true); } catch { } }
+    }
+
+    [Fact]
+    public async Task AnExistingArchiveWithRowsButNoIdentity_IsRefusedUntilAdopted()
+    {
+        var (sha, rel) = await WriteOriginalAsync(deleteRequest: false);
+        await AddEmailWithRowAsync(sha, rel);
+        await ExecAsync(@"DELETE FROM mail_archiver.""ArchiveIdentity"";");
+        File.Delete(Path.Combine(_root, ArchiveIdentityService.MarkerFile));
+
+        await using var c = NewContext();
+        var svc = new ArchiveIdentityService(c);
+        var check = await svc.CheckAsync(Path.GetFullPath(_root));
+        Assert.False(check.Ok);
+        Assert.Equal(ArchiveIdentityCheck.NotAdopted, check.Code);
+        Assert.True((await svc.AdoptAsync(Path.GetFullPath(_root))).Ok);
+    }
+
+    [Fact]
+    public async Task TheCircuitBreaker_RefusesAHugeShare_UntilTheAdminRunsItAnyway()
+    {
+        var files = new List<(string Sha, string Rel)>();
+        for (var i = 0; i < 60; i++) files.Add(await WriteOriginalAsync());      // 60 of 60 look deleted at once: above max(50, 5%)
+        var bin = NewBin(Raw());
+
+        var refused = await bin.RunOnceAsync("t");
+        Assert.Equal(OriginalCleanupRun.Refused, refused.Status);
+        Assert.Contains("safety limit", refused.Alarm);
+        Assert.Equal(0, refused.Binned);
+        Assert.All(files, f => Assert.True(File.Exists(Abs(f.Rel))));
+
+        var anyway = await bin.RunOnceAsync("t", CancellationToken.None, overrideBreaker: true);
+        Assert.Equal(OriginalCleanupRun.Completed, anyway.Status);
+        Assert.Equal(60, anyway.Binned);
+    }
+
+    [Fact]
+    public async Task TheBreakerDoesNotGetInTheWayOfASmallArchive()
+    {
+        for (var i = 0; i < 5; i++) await WriteOriginalAsync();                  // 5 of 5 is above 5% but below the minimum of 50 files
+        Assert.Equal(5, (await NewBin(Raw()).RunOnceAsync("t")).Binned);
+    }
+
+    // ===== N-03: record and entry first, crash recovery ====================================================
+
+    [Fact]
+    public async Task AnEntryWhoseFileNeverArrivedInTheTrash_IsClearedAtTheNextRun_AndTheFileStaysLive()
+    {
+        var (sha, rel) = await WriteOriginalAsync(deleteRequest: false);       // simulate: entry written, process died before the move
+        await using (var c = NewContext())
+        {
+            c.OriginalBinEntries.Add(new OriginalBinEntry { StoragePath = rel, Sha256 = sha, BinPath = OriginalBin.BinRel(sha), BinnedAt = DateTime.UtcNow, Size = 1 });
+            await c.SaveChangesAsync();
+        }
+
+        var run = await NewBin(Raw()).RunOnceAsync("t");
+
+        Assert.Equal(0, await BinEntriesAsync());
+        Assert.True(File.Exists(Abs(rel)));
+        Assert.Contains(await ChainAsync("original.restored"), e => e.Sha256 == sha && e.Payload.Contains("never completed"));
+    }
+
+    [Fact]
+    public async Task AFileInTheTrashWithNoEntry_IsAdopted_ThenPurgedLikeAnyOther()
+    {
+        var (sha, rel) = WriteOriginal();
+        var bin = Abs(OriginalBin.BinRel(sha));
+        Directory.CreateDirectory(Path.GetDirectoryName(bin)!);
+        File.Move(Abs(rel), bin);                                               // simulate: moved, then the entry was never saved
+
+        var bins = NewBin(Raw());
+        await bins.RunOnceAsync("t");
+
+        Assert.Equal(1, await BinEntriesAsync());
+        Assert.Contains(await ChainAsync("original.binned"), e => e.Sha256 == sha && e.Payload.Contains("adopted"));
+        await BackdateBinnedAsync(sha, 40);
+        Assert.Equal(1, (await bins.RunOnceAsync("t")).Purged);
+        Assert.False(File.Exists(bin));
+    }
+
+    [Fact]
+    public async Task AnUnlistedTrashFile_ThatARowNeedsAgain_ComesBack()
+    {
+        var (sha, rel) = WriteOriginal();
+        var bin = Abs(OriginalBin.BinRel(sha));
+        Directory.CreateDirectory(Path.GetDirectoryName(bin)!);
+        File.Move(Abs(rel), bin);
+        await AddEmailWithRowAsync(sha, rel);                                   // the email exists, its original sits unlisted in the Trash
+
+        await NewBin(Raw()).RunOnceAsync("t");
+
+        Assert.True(File.Exists(Abs(rel)));
+        Assert.False(File.Exists(bin));
+        Assert.Equal(0, await BinEntriesAsync());
+    }
+
+    [Fact]
+    public async Task ALiveFileTouchedJustBeforeTheMove_IsNotMoved()
+    {
+        var (_, rel) = await WriteOriginalAsync(aged: false);                   // an import that reused it just touched it
+        var run = await NewBin(Raw()).RunOnceAsync("t");
+        Assert.Equal(0, run.Binned);
+        Assert.True(File.Exists(Abs(rel)));
+        Assert.Equal(0, await BinEntriesAsync());
+    }
+
+    // ===== N-15, N-07: housekeeping ========================================================================
+
+    [Fact]
+    public async Task LeftoverTempFilesOfInterruptedWrites_AreRemovedAfterADay_AndOnlyThose()
+    {
+        var (sha, rel) = WriteOriginal();
+        var oldTmp = Abs(rel) + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var newTmp = Abs(rel) + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var odd = Abs(rel) + ".keep.tmp";
+        File.WriteAllBytes(oldTmp, new byte[] { 1 }); File.SetLastWriteTimeUtc(oldTmp, DateTime.UtcNow.AddDays(-3));
+        File.WriteAllBytes(newTmp, new byte[] { 1 });
+        File.WriteAllBytes(odd, new byte[] { 1 }); File.SetLastWriteTimeUtc(odd, DateTime.UtcNow.AddDays(-3));
+
+        await NewBin(Raw()).RunOnceAsync("t");
+
+        Assert.False(File.Exists(oldTmp));
+        Assert.True(File.Exists(newTmp));
+        Assert.True(File.Exists(odd));
+    }
+
+    [Fact]
+    public async Task ExtractedAttachmentText_NoAttachmentRefersToAnyMore_IsRemoved()
+    {
+        var orphan = Convert.ToHexString(SHA256.HashData(Guid.NewGuid().ToByteArray())).ToLowerInvariant();
+        var recent = Convert.ToHexString(SHA256.HashData(Guid.NewGuid().ToByteArray())).ToLowerInvariant();
+        await using (var c = NewContext())
+        {
+            c.AttachmentTexts.Add(new AttachmentText { Sha256 = orphan, Text = "orphan text", ExtractedAt = DateTime.UtcNow.AddDays(-3) });
+            c.AttachmentTexts.Add(new AttachmentText { Sha256 = recent, Text = "recent text", ExtractedAt = DateTime.UtcNow });
+            await c.SaveChangesAsync();
+        }
+        try
+        {
+            await NewBin(Raw()).RunOnceAsync("t");
+            await using var c = NewContext();
+            Assert.False(await c.AttachmentTexts.AnyAsync(t => t.Sha256 == orphan));
+            Assert.True(await c.AttachmentTexts.AnyAsync(t => t.Sha256 == recent));     // too young to judge
+        }
+        finally { await using var c = NewContext(); await c.AttachmentTexts.Where(t => t.Sha256 == orphan || t.Sha256 == recent).ExecuteDeleteAsync(); }
+    }
+
+    // ===== N-08: one operation at a time =====================================================================
+
+    [Fact]
+    public async Task ARestoreAndARunNeverOverlap_TheRestoreWaitsOrSaysBusy()
+    {
+        var (sha, rel) = await WriteOriginalAsync();
+        var bin = NewBin(Raw());
+        await bin.RunOnceAsync("t");
+        // run and restore at once: whichever way they interleave, the original ends up live or in the Trash with a matching entry, never unlisted
+        var run = bin.RunOnceAsync("t2");
+        var restore = bin.RestoreAsync(sha, "admin");
+        await Task.WhenAll(run, restore);
+
+        var live = File.Exists(Abs(rel)); var inBin = File.Exists(Abs(OriginalBin.BinRel(sha)));
+        Assert.True(live ^ inBin, "the original must be in exactly one place");
+        Assert.Equal(inBin ? 1 : 0, await BinEntriesAsync());
+    }
+
+    [Fact]
+    public void TheBreakerSettings_AreValidated()
+    {
+        var raw = new RawMessageOptions();
+        raw.OriginalCleanup.BreakerPercent = 0; raw.OriginalCleanup.BreakerMinFiles = 0;
+        Assert.Equal(2, OriginalCleanupOptions.Validate(raw).Count);
+        var def = new OriginalCleanupOptions();
+        Assert.Equal(5, def.BreakerPercent); Assert.Equal(50, def.BreakerMinFiles);
     }
 }
