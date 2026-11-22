@@ -20,6 +20,7 @@ namespace MailArchiver.Migrations
                 ALTER TABLE mail_archiver.""ArchivedEmails"" ADD COLUMN IF NOT EXISTS ""GmailThreadId"" text NULL;
                 ALTER TABLE mail_archiver.""ArchivedEmails"" ADD COLUMN IF NOT EXISTS ""LabelsCapturedAt"" timestamp without time zone NULL;
                 ALTER TABLE mail_archiver.""MailAccounts"" ADD COLUMN IF NOT EXISTS ""LabelsRefreshedAt"" timestamp without time zone NULL;
+                ALTER TABLE mail_archiver.""MailAccounts"" ADD COLUMN IF NOT EXISTS ""GmailAllMailOnly"" boolean NULL;
             ");
             migrationBuilder.Sql(@"
                 CREATE INDEX IF NOT EXISTS ""IX_ArchivedEmails_Labels"" ON mail_archiver.""ArchivedEmails"" USING GIN (""Labels"");

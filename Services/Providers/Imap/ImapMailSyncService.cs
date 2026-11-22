@@ -143,6 +143,14 @@ namespace MailArchiver.Services.Providers.Imap
 
                 _logger.LogInformation("Found {Count} folders for account: {AccountName}", allFolders.Count, account.Name);
 
+                // Fork: syncing only the folder with all mail needs that folder. If Gmail hides it from IMAP the sync would "complete" with
+                // nothing archived, so it counts as a failed folder (LastSync does not move) and the reason is logged.
+                if (MailArchiver.Services.Shared.GmailAccount.AllMailOnly(account) && !allFolders.Any(f => f.Attributes.HasFlag(FolderAttributes.All)))
+                {
+                    _logger.LogError("Gmail account {AccountName} is set to sync only the folder with all mail, but the server does not show one. In Gmail, open Settings, Labels and set 'All Mail' to 'Show in IMAP' (or untick the option on the account).", account.Name);
+                    failedFolders++;
+                }
+
                 foreach (var folder in allFolders)
                 {
                     var stopReason = SyncInterruption.Evaluate(
@@ -167,6 +175,14 @@ namespace MailArchiver.Services.Providers.Imap
 
                     try
                     {
+                        // Fork: a Gmail account normally syncs only the folder that holds all mail; the labels are recorded instead of the folders.
+                        if (MailArchiver.Services.Shared.GmailAccount.AllMailOnly(account) && !folder.Attributes.HasFlag(FolderAttributes.All))
+                        {
+                            _logger.LogDebug("Skipping folder {FolderName} of Gmail account {AccountName}: only the folder with all mail is synced", folder.FullName, account.Name);
+                            processedFolders++;
+                            continue;
+                        }
+
                         if (IsExcludedFolder(folder, account))
                         {
                             _logger.LogInformation("Skipping excluded folder: {FolderName} for account: {AccountName}",

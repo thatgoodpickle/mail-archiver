@@ -51,6 +51,9 @@ namespace MailArchiver.Migrations
                     b.Property<int?>("FullSyncIntervalHours")
                         .HasColumnType("integer");
 
+                    b.Property<bool?>("GmailAllMailOnly")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("GmailSearchFilter")
                         .HasColumnType("text");
 

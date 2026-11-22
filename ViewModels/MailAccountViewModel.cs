@@ -62,6 +62,9 @@ namespace MailArchiver.Models.ViewModels
         [StringLength(500)]
         public string? GmailSearchFilter { get; set; }
 
+        [Display(Name = "Gmail: sync only the folder with all mail")]
+        public bool GmailAllMailOnly { get; set; } = true;
+
         /// <summary>Set by the form when the Test button showed that the filter skips most of the mailbox and the admin confirmed it.</summary>
         public bool GmailFilterConfirmed { get; set; }
         

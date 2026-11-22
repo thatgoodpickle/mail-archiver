@@ -478,6 +478,7 @@ namespace MailArchiver.Controllers
                     TenantId = model.Provider == ProviderType.M365 ? model.TenantId : null,
                     ExcludedFolders = string.Empty,
                     GmailSearchFilter = FilterToStore(model.Provider, model.ImapServer, model.GmailSearchFilter),
+                    GmailAllMailOnly = model.Provider == ProviderType.IMAP && MailArchiver.Services.Shared.GmailAccount.Is(new MailAccount { ImapServer = model.ImapServer }) ? model.GmailAllMailOnly : null,
                     DeleteAfterDays = model.DeleteAfterDays,
                     LocalRetentionDays = model.LocalRetentionDays,
                     SyncIntervalMinutes = model.SyncIntervalMinutes,
@@ -845,6 +846,7 @@ namespace MailArchiver.Controllers
                 LastSync = account.LastSync,
                 ExcludedFolders = account.ExcludedFolders,
                 GmailSearchFilter = MailArchiver.Services.Shared.GmailAccount.Is(account) ? (account.GmailSearchFilter ?? MailArchiver.Services.Shared.GmailAccount.DefaultFilter) : null,
+                GmailAllMailOnly = account.GmailAllMailOnly ?? true,
                 DeleteAfterDays = account.DeleteAfterDays,
                 LocalRetentionDays = account.LocalRetentionDays,
                 SyncIntervalMinutes = account.SyncIntervalMinutes,
@@ -1183,6 +1185,7 @@ namespace MailArchiver.Controllers
                     account.ExcludedFolders = model.ExcludedFolders ?? string.Empty;
                     var oldGmailFilter = account.GmailSearchFilter;
                     account.GmailSearchFilter = FilterToStore(account.Provider, account.ImapServer, model.GmailSearchFilter);
+                    account.GmailAllMailOnly = MailArchiver.Services.Shared.GmailAccount.Is(account) && account.Provider == ProviderType.IMAP ? model.GmailAllMailOnly : null;
                     account.DeleteAfterDays = model.DeleteAfterDays;
                     account.LocalRetentionDays = model.LocalRetentionDays;
                     account.SyncIntervalMinutes = model.SyncIntervalMinutes;

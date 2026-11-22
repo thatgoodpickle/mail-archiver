@@ -40,6 +40,9 @@ namespace MailArchiver.Models.ViewModels
         [System.ComponentModel.DataAnnotations.Display(Name = "Gmail search filter")]
         [System.ComponentModel.DataAnnotations.StringLength(500)]
         public string? GmailSearchFilter { get; set; }
+
+        [System.ComponentModel.DataAnnotations.Display(Name = "Gmail: sync only the folder with all mail")]
+        public bool GmailAllMailOnly { get; set; } = true;
         
         [Display(Name = "Account Enabled")]
         public bool IsEnabled { get; set; } = true;

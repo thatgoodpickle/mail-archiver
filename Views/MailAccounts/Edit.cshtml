@@ -155,6 +155,11 @@
                             <span asp-validation-for="Password" class="text-danger"></span>
                         </div>
 
+                        <div class="mb-3 form-check">
+                            <input asp-for="GmailAllMailOnly" class="form-check-input" />
+                            <label asp-for="GmailAllMailOnly" class="form-check-label">Gmail: sync only the folder with all mail</label>
+                            <div class="form-text">Recommended for Gmail. Every message is stored once, and its labels are recorded with it (Inbox, Sent, your own labels), instead of being downloaded again for every label folder. Needs Gmail's "All Mail" folder to be visible to IMAP (Gmail settings, Labels).</div>
+                        </div>
                         <div class="mb-3" id="gmailFilterBox">
                             <label asp-for="GmailSearchFilter" class="form-label">Gmail search filter</label>
                             <input asp-for="GmailSearchFilter" class="form-control" id="GmailSearchFilter" placeholder="-label:Marketing" autocomplete="off" />

@@ -25,6 +25,9 @@ public class MailAccount
     /// </summary>
     public string? GmailSearchFilter { get; set; }
 
+    /// <summary>Fork: sync only the Gmail folder that holds all mail (labels are recorded instead of folders). Null = yes for a Gmail account.</summary>
+    public bool? GmailAllMailOnly { get; set; }
+
     /// <summary>Fork: when the Gmail labels of the archived messages were last refreshed from the server (once a day at most).</summary>
     public DateTime? LabelsRefreshedAt { get; set; }
     

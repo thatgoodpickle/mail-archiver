@@ -19,6 +19,9 @@ namespace MailArchiver.Services.Shared
             return f.Length == 0 ? null : f;
         }
 
+        /// <summary>True when only the folder with all mail is synced (the default for a Gmail account); the labels carry what the folders would have.</summary>
+        public static bool AllMailOnly(MailAccount account) => Is(account) && (account.GmailAllMailOnly ?? true);
+
         public static bool Is(MailAccount account)
         {
             var host = account.ImapServer ?? string.Empty;
