@@ -65,6 +65,9 @@ The `.env` value stops working after that, which is expected.
 5. **Cap the first sync:** Settings, Forwarding and POP/IMAP, "Limit IMAP folders to contain no more than this many messages": **1,000**.
    The app then sees only the 1,000 most recent messages. You raise this later.
 6. Leave Gmail's auto-expunge as it is: this archive never deletes anything in Gmail.
+7. **The app only reads from Gmail during a sync** (folders are opened read-only, so nothing is marked as read or changed). Three actions
+   WRITE to the mailbox, and must not be used on a real account: the account's "delete after days" and "local retention days" options, and
+   "Copy to Mailbox" (restore). Leave all three alone.
 
 ## 5. Add the account in the app
 
@@ -90,8 +93,14 @@ recreate the folders, `docker compose up -d`, set up again. Gmail is unaffected.
 
 ## 7. Raise the cap, then call it production
 
-Raise Gmail's cap to 5,000, then 10,000, then "Do not limit". Watch the daily download limit: the sync pauses at 2.5 GB and resumes by
-itself the next day, so a 5 GB mailbox takes about three days. Only when the whole mailbox is in and checked: take a manual PBS backup
+Raise Gmail's cap to 5,000, then 10,000, then "Do not limit". **After EVERY raise, open the account's page and press "Full resync".**
+This is required: the ordinary sync only looks for mail delivered after the last sync (minus 12 hours), and a raised cap reveals OLDER mail,
+which that search never finds. Without the Full resync the account looks complete while thousands of older messages are missing. A Full
+resync does not download what is already archived again (the sync checks the Message-ID and size first). Watch the daily download limit: the sync pauses at 2.5 GB and resumes by
+itself the next day, so a 5 GB mailbox takes about three days. **Reconcile the count** before you call it complete: on the account's page press **Test** on the Gmail filter and note how many messages
+it KEEPS (not skips); that number must equal the number of emails archived for the account (plus any listed under "Messages that could not
+be archived"). A difference means mail is missing: press Full resync again and read the log. Only when the whole mailbox is in, the counts
+match and the checks are clean: take a manual PBS backup
 (label it "first full sync"), and from then on the daily job is your safety net.
 
 ## 8. Backups with PBS

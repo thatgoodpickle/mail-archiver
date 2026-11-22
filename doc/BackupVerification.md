@@ -27,9 +27,10 @@ reports it as Missing). A single whole-VM snapshot avoids this.
 
 1. Restore the latest snapshot to a temporary VM or stack. Do not point it at the live mailboxes: disable the
    accounts or use no network, so it cannot sync.
-2. Start it and, as an admin with an API key (read it from a file, never on a command line):
-   `GET /api/v1/integrity/chain/verify` should return `"ok": true`, then `POST /api/v1/integrity/runs` and read
-   `GET /api/v1/integrity/runs/{id}` until it is Completed. Expect 0 invalid, 0 missing, 0 inconsistent.
+2. Start it and log in as admin. On the production stack the REST API is switched off, so use the **Integrity & Storage** page:
+   press "Check the history log" (it must say the log is intact), then "Check all emails" and wait until it is Completed. Expect 0
+   invalid, 0 missing, 0 inconsistent. (On a stack with the API switched on, `GET /api/v1/integrity/chain/verify` and
+   `POST /api/v1/integrity/runs` do the same with an API key read from a file, never typed on a command line.)
 3. Compare the restored copy with the live archive (next section).
 4. Throw the temporary VM away.
 
