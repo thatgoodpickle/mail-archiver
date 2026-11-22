@@ -31,7 +31,7 @@ services:
       - ./originals:/data/originals       # the evidence: back this up first
       - ./logs:/app/logs
       - ./keys:/app/DataProtection-Keys
-      - ./manifests:/app/Manifests         # signed manifests and the signing key: must survive a container recreate
+      - ./manifests:/app/Manifests         # signed manifests: must survive a container recreate (the signing key lives with the keys above)
     # The image's built-in health check calls an endpoint that needs an API key
     # (MAILARCHIVER_HEALTH_API_KEY), which this test stack does not set, so it would show "unhealthy".
     healthcheck:

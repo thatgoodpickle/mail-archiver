@@ -85,12 +85,30 @@ namespace MailArchiver.Services.Shared
         }
 
         private string PublicKeyPath => Path.Combine(Dir, "public-key.pem");
+        private bool _keyRelocated;
 
         /// <summary>Loads the signing key, creating it (and the public key file) on first use.</summary>
         private ECDsa LoadOrCreateKey()
         {
             Directory.CreateDirectory(Dir);
             var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+
+            // N-14: an installation from before F-06 has its private key beside the manifests. Move it once to the new place (0600),
+            // so it stops sitting in the manifest volume and manifests keep being signed with the same key.
+            var legacyKey = Path.Combine(Dir, "signing-key.pem");
+            if (!File.Exists(KeyPath) && File.Exists(legacyKey) && !string.Equals(Path.GetFullPath(legacyKey), Path.GetFullPath(KeyPath), StringComparison.Ordinal))
+            {
+                var pem = File.ReadAllText(legacyKey);
+                using (var check = ECDsa.Create()) check.ImportFromPem(pem);   // refuse to move something that is not a key
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(KeyPath))!);
+                var moveOptions = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+                if (!OperatingSystem.IsWindows()) moveOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                using (var fs = new FileStream(KeyPath, moveOptions)) using (var w = new StreamWriter(fs)) w.Write(pem);
+                File.Delete(legacyKey);
+                _keyRelocated = true;
+                _logger.LogWarning("The manifest signing key was moved from {Old} to {New}", legacyKey, KeyPath);
+            }
+
             if (File.Exists(KeyPath))
             {
                 ecdsa.ImportFromPem(File.ReadAllText(KeyPath));
@@ -124,6 +142,11 @@ namespace MailArchiver.Services.Shared
             try
             {
                 using var key = LoadOrCreateKey();
+                if (_keyRelocated)
+                {
+                    _keyRelocated = false;
+                    await _chain.AppendAsync("key.relocated", null, null, new { from = "beside the manifests", to = "the key directory", by = requestedBy }, cancellationToken);
+                }
                 var now = DateTime.UtcNow;
                 var name = $"manifest-{now:yyyyMMdd'T'HHmmss'Z'}";
                 var entriesName = name + ".jsonl";

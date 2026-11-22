@@ -53,6 +53,11 @@ namespace MailArchiver.Services.Shared
         public const string Unchained = "Unchained";
         /// <summary>A chain entry exists and its hash disagrees with the database, or the entry itself is corrupt.</summary>
         public const string Mismatch = "Mismatch";
+        /// <summary>
+        /// Second review N-05: no chain entry exists although the email was archived AFTER the chain began writing 'original.stored'
+        /// entries: a failed or lost chain write. A finding (ChainMismatch), not informational.
+        /// </summary>
+        public const string Gap = "Gap";
         public const string Unknown = "Unknown";
     }
 
@@ -97,7 +102,7 @@ namespace MailArchiver.Services.Shared
             _dateTimeHelper = dateTimeHelper;
         }
 
-        private sealed record RawRow(string Sha256, string Source, string StorageType);
+        private sealed record RawRow(string Sha256, string Source, string StorageType, DateTime CreatedAt);
 
         private sealed record EmailRow(
             string Subject, string Body, string HtmlBody, string From, string To, string Cc, string Bcc,
@@ -121,7 +126,7 @@ namespace MailArchiver.Services.Shared
 
             var row = await _context.RawMessages.AsNoTracking()
                 .Where(r => r.ArchivedEmailId == emailId)
-                .Select(r => new RawRow(r.Sha256, r.Source, r.StorageType))
+                .Select(r => new RawRow(r.Sha256, r.Source, r.StorageType, r.CreatedAt))
                 .FirstOrDefaultAsync(cancellationToken);
 
             // What the audit chain recorded when an original was stored for this email (F-04).
@@ -160,6 +165,17 @@ namespace MailArchiver.Services.Shared
                 {
                     chainState = IntegrityChainState.Mismatch;
                     chainFinding = $"The original's hash in the database ({row.Sha256}) is not the hash the audit chain recorded when it was stored ({chainEntries[^1].Sha256}).";
+                }
+            }
+
+            // N-05: no entry at all. Before the chain began that is informational; after it began, it is a gap (a failed chain write).
+            if (chainEntries.Count == 0)
+            {
+                var chainBegan = await FirstChainTimeAsync(cancellationToken);
+                if (chainBegan != null && row.CreatedAt > chainBegan.Value)
+                {
+                    chainState = IntegrityChainState.Gap;
+                    chainFinding = "No audit chain entry exists for this email although it was archived after the chain began (a failed or lost chain write).";
                 }
             }
 
@@ -230,6 +246,18 @@ namespace MailArchiver.Services.Shared
             return Finish(emailId, row.Sha256, row.Source, row.StorageType, e.ContentStripped, findings, chainState, notCompared);
         }
 
+        private DateTime? _firstChainTime; private bool _firstChainTimeKnown;
+
+        /// <summary>When the chain first recorded an original (cached for the life of this service instance); null when it never did.</summary>
+        private async Task<DateTime?> FirstChainTimeAsync(CancellationToken ct)
+        {
+            if (_firstChainTimeKnown) return _firstChainTime;
+            _firstChainTime = await _context.AuditChain.AsNoTracking().Where(c => c.Kind == "original.stored")
+                .OrderBy(c => c.Seq).Select(c => (DateTime?)c.Timestamp).FirstOrDefaultAsync(ct);
+            _firstChainTimeKnown = true;
+            return _firstChainTime;
+        }
+
         private static IntegrityReport Report(int emailId, IntegrityStatus status, RawRow row, EmailRow e, string chainState,
             string finding, string? chainFinding)
         {
@@ -243,7 +271,7 @@ namespace MailArchiver.Services.Shared
             List<string> findings, string chainState, List<string> notCompared)
         {
             IntegrityStatus status;
-            if (chainState == IntegrityChainState.Mismatch) status = IntegrityStatus.ChainMismatch;
+            if (chainState == IntegrityChainState.Mismatch || chainState == IntegrityChainState.Gap) status = IntegrityStatus.ChainMismatch;
             else status = findings.Count == 0 ? IntegrityStatus.Valid : IntegrityStatus.Inconsistent;
             return new IntegrityReport(emailId, status, sha, source, storage, lean, findings, chainState, notCompared);
         }
@@ -271,6 +299,11 @@ namespace MailArchiver.Services.Shared
                 }
                 else notCompared.Add("Text body (over 100 KB, stored truncated)");
             }
+            else if (!string.IsNullOrWhiteSpace(e.Body) && CalendarContentHelper.TryExtractCalendar(message) == null)
+            {
+                // N-13: the original has no text, so the database copy must not show any (a synthesized calendar summary is the one exception).
+                findings.Add("The stored text body has content, but the original has no text body.");
+            }
 
             // Lean rows keep no HTML body and no copy of the bodies: they are rebuilt from the original on every read.
             if (e.ContentStripped)
@@ -291,8 +324,19 @@ namespace MailArchiver.Services.Shared
             if (_dateTimeHelper != null)
             {
                 var expectedDate = _dateTimeHelper.ConvertToDisplayTimeZone(MailContentHelper.ExtractEmailDate(message.Date, message.Headers));
-                if (Math.Abs((e.SentDate - expectedDate).TotalSeconds) > DateToleranceSeconds)
-                    findings.Add("The sent date differs from the original.");
+                var diff = e.SentDate - expectedDate;
+                if (Math.Abs(diff.TotalSeconds) > DateToleranceSeconds)
+                {
+                    // N-09: the stored date was converted with the display time zone of the day it was archived. If the zone setting (or
+                    // tzdata) changed since, the whole archive differs by a time-zone offset: a whole number of quarter hours, within two
+                    // zones' range. That is not a finding (it would bury real ones); it is noted. Any other difference is.
+                    var quarterHours = diff.TotalMinutes / 15.0;
+                    var isZoneShift = Math.Abs(diff.TotalHours) <= 26 && Math.Abs(quarterHours - Math.Round(quarterHours)) * 15 * 60 <= DateToleranceSeconds;
+                    if (isZoneShift)
+                        notCompared.Add("Sent date (differs from the original only by a time-zone offset: the display time zone was probably changed after archiving)");
+                    else
+                        findings.Add("The sent date differs from the original.");
+                }
             }
             else notCompared.Add("Sent date (no time-zone helper available)");
 
@@ -368,6 +412,11 @@ namespace MailArchiver.Services.Shared
             var coveredHashes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             void Cover(string sha) => coveredHashes[sha] = coveredHashes.GetValueOrDefault(sha) + 1;
 
+            // N-04: what the ingest would have synthesized from this original (the same helper), to recognise a legitimate synthesized .ics.
+            var expectedCalendar = CalendarContentHelper.TryExtractCalendar(message);
+            var expectedCalendarSha = expectedCalendar == null ? null : RawMessageCodec.ComputeSha256(Encoding.UTF8.GetBytes(expectedCalendar.Content));
+            var synthesizedCalendarSeen = 0;
+
             foreach (var a in rows)
             {
                 var isCalendar = (a.ContentType ?? string.Empty).StartsWith("text/calendar", StringComparison.OrdinalIgnoreCase);
@@ -405,10 +454,14 @@ namespace MailArchiver.Services.Shared
                         continue;
                     }
 
-                    // A calendar attachment can be synthesized at archive time and is not a part of the original.
-                    if (isCalendar) continue;
-
                     var match = parts.Where(p => string.Equals(p.Sha256, actual, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    // N-04: a calendar attachment can be SYNTHESIZED at archive time (a floating text/calendar part is not an attachment of the
+                    // original). It is accepted only when it can be re-derived from the original, and at most once; anything else is a finding.
+                    if (match.Count == 0 && isCalendar && expectedCalendarSha != null
+                        && string.Equals(expectedCalendarSha, actual, StringComparison.OrdinalIgnoreCase) && synthesizedCalendarSeen++ == 0)
+                        continue;
+
                     if (match.Count == 0)
                     {
                         findings.Add($"Attachment '{a.FileName}' is not found in the original.");
@@ -420,7 +473,6 @@ namespace MailArchiver.Services.Shared
                     continue;
                 }
 
-                if (isCalendar) continue;
                 findings.Add($"Attachment '{a.FileName}' has neither stored bytes nor a place in the original.");
             }
 

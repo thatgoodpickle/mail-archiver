@@ -193,7 +193,8 @@ namespace MailArchiver.Controllers
             var path = _manifests.ResolveFile(name, kind);
             if (path == null) return NotFound();
             var k = kind!.ToLowerInvariant();
-            await LogAsync($"manifest file {(k == "key" ? "public-key.pem" : name + "." + k)} downloaded");
+            // N-18: a GET must not write to the audit chain (a page could make an admin's browser request it thousands of times).
+            await Task.CompletedTask;
             var type = k switch { "json" => "application/json", "jsonl" => "application/x-ndjson", "key" => "application/x-pem-file", _ => "application/octet-stream" };
             return PhysicalFile(path, type, Path.GetFileName(path));
         }
@@ -290,7 +291,7 @@ namespace MailArchiver.Controllers
 
         // ----------------------------------------------------------------------------------------- settings
 
-        private SettingActor Actor() => new(_auth.GetCurrentUserId(HttpContext), Who);
+        private SettingActor Actor() => new(_auth.GetCurrentUserId(HttpContext), Who, HttpContext.Connection.RemoteIpAddress?.ToString());
 
         /// <summary>
         /// The single Save of the settings form. Fields: <c>v_&lt;Key&gt;</c> = the new value of a changed setting, <c>r_&lt;Key&gt;</c> = go back to

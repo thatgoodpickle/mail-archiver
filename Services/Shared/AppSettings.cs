@@ -294,7 +294,7 @@ namespace MailArchiver.Services.Shared
         long Min, long Max, string[] Choices, bool AppliesLive, string? RestartNote, string? RiskyNote,
         string? ChangedBy, DateTime? ChangedAt, string? PasswordRule = null);
 
-    public sealed record SettingActor(int? UserId, string Username);
+    public sealed record SettingActor(int? UserId, string Username, string? RemoteIp = null);
 
     public sealed record SettingChangeResult(bool Ok, string Message, bool NeedsPassword = false);
 
@@ -341,6 +341,7 @@ namespace MailArchiver.Services.Shared
         private const int MaxPasswordFailures = 5;
         private static readonly TimeSpan PasswordWindow = TimeSpan.FromMinutes(15);
         private static readonly ConcurrentDictionary<int, (int Failures, DateTime Since)> Failures = new();
+        private static readonly ConcurrentDictionary<string, (int Failures, DateTime Since)> IpFailures = new();
 
         /// <summary>Forgets the password-failure counters (tests).</summary>
         internal static void ResetThrottle() => Failures.Clear();
@@ -365,11 +366,30 @@ namespace MailArchiver.Services.Shared
             IOptionsMonitor<AttachmentTextOptions> ocr, IOptionsMonitor<StorageModeOptions> storage,
             IOptionsMonitorCache<IntegrityOptions> integrityCache, IOptionsMonitorCache<RawMessageOptions> rawCache,
             IOptionsMonitorCache<AttachmentTextOptions> ocrCache,
-            IAuditChain chain, IAccessLogService accessLog, IUserService users, ILogger<SettingsService> logger)
+            IAuditChain chain, IAccessLogService accessLog, IUserService users, ILogger<SettingsService> logger,
+            Microsoft.Extensions.Configuration.IConfiguration? config = null)
         {
+            _config = config;
             _db = db; _snapshot = snapshot; _pins = pins; _integrity = integrity; _raw = raw; _ocr = ocr; _storage = storage;
             _integrityCache = integrityCache; _rawCache = rawCache; _ocrCache = ocrCache;
             _chain = chain; _accessLog = accessLog; _users = users; _logger = logger;
+        }
+
+        private readonly Microsoft.Extensions.Configuration.IConfiguration? _config;
+
+        /// <summary>
+        /// What a setting becomes when its stored value is removed (second review N-10): the value from the configuration (appsettings.json,
+        /// environment) WITHOUT the database overlay, not the built-in default. Used for "reset", for the risky check of a reset, for the audit
+        /// record and for the page's "default" column, so a reset that lowers a protection asks for the password and records the real new value.
+        /// </summary>
+        private string ResetTarget(SettingDefinition def)
+        {
+            if (_config == null) return SettingsCatalog.Default(def);
+            var i = new IntegrityOptions(); _config.GetSection(IntegrityOptions.Section).Bind(i);
+            var r = new RawMessageOptions(); _config.GetSection(RawMessageOptions.RawMessages).Bind(r);
+            var o = new AttachmentTextOptions(); _config.GetSection(AttachmentTextOptions.Section).Bind(o);
+            var st = new StorageModeOptions(); _config.GetSection(StorageModeOptions.Section).Bind(st);
+            return def.Read(new OptionsBundle(i, r, o, st));
         }
 
         private OptionsBundle Bundle() => new(_integrity.CurrentValue, _raw.CurrentValue, _ocr.CurrentValue, _storage.CurrentValue);
@@ -381,7 +401,7 @@ namespace MailArchiver.Services.Shared
             foreach (var d in SettingsCatalog.All)
             {
                 var value = d.Read(bundle);
-                var def = SettingsCatalog.Default(d);
+                var def = ResetTarget(d);
                 var pinned = _pins.IsPinned(d.Key);
                 _snapshot.All.TryGetValue(d.Key, out var stored);
                 string source;
@@ -409,7 +429,7 @@ namespace MailArchiver.Services.Shared
             var bundle = Bundle();
             var old = def.Read(bundle);
             string target;
-            if (reset) target = SettingsCatalog.Default(def);
+            if (reset) target = ResetTarget(def);
             else if (!SettingsCatalog.TryValidate(def, newValue, out target, out var why)) return new(false, $"{def.Label}: {why}");
 
             if (target == old && (reset ? !_snapshot.All.ContainsKey(def.Key) : true))
@@ -490,7 +510,7 @@ namespace MailArchiver.Services.Shared
 
                 var old = def.Read(bundle);
                 string target;
-                if (c.Reset) target = SettingsCatalog.Default(def);
+                if (c.Reset) target = ResetTarget(def);
                 else if (!SettingsCatalog.TryValidate(def, c.Value, out target, out var why)) { errors[def.Key] = why; continue; }
 
                 if (target == old && (c.Reset ? !_snapshot.All.ContainsKey(def.Key) : true)) continue;   // nothing to change
@@ -608,6 +628,10 @@ namespace MailArchiver.Services.Shared
             var now = DateTime.UtcNow;
             if (Failures.TryGetValue(user.Id, out var f) && now - f.Since < PasswordWindow && f.Failures >= MaxPasswordFailures)
                 return new(false, "Too many wrong passwords. Try again in a few minutes.", true);
+            // N-19: also per address, so rotating through admin accounts from one place does not help (twice the per-account budget).
+            var ip = actor.RemoteIp;
+            if (!string.IsNullOrEmpty(ip) && IpFailures.TryGetValue(ip, out var fi) && now - fi.Since < PasswordWindow && fi.Failures >= MaxPasswordFailures * 2)
+                return new(false, "Too many wrong passwords from this address. Try again in a few minutes.", true);
 
             if (string.IsNullOrEmpty(password))
                 return new(false, needPasswordMessage, true);
@@ -615,6 +639,10 @@ namespace MailArchiver.Services.Shared
             if (!_users.VerifyPassword(password, user.PasswordHash))
             {
                 Failures.AddOrUpdate(user.Id, (1, now), (_, cur) => now - cur.Since >= PasswordWindow ? (1, now) : (cur.Failures + 1, cur.Since));
+                if (!string.IsNullOrEmpty(ip))
+                    IpFailures.AddOrUpdate(ip, (1, now), (_, cur) => now - cur.Since >= PasswordWindow ? (1, now) : (cur.Failures + 1, cur.Since));
+                // N-19: wrong passwords are recorded in the chain (the counters themselves live in memory and reset at a restart).
+                try { await _chain.AppendAsync("setting.password-failed", null, null, new { user = actor.Username, ip }); } catch { /* AppendAsync never throws */ }
                 return new(false, "The password is not correct. Nothing was changed.", true);
             }
             Failures.TryRemove(user.Id, out _);
