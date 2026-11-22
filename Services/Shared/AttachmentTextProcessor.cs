@@ -9,7 +9,9 @@ namespace MailArchiver.Services.Shared
         string Mode,
         IReadOnlyList<AttachmentTextCount> Texts,
         long PendingAttachments,
-        long EmailsAwaitingIndex);
+        long EmailsAwaitingIndex,
+        string? OcrEngine = null,
+        string? OcrUnavailable = null);
 
     public sealed record AttachmentTextCount(string Status, string Method, long Count);
 
@@ -22,6 +24,9 @@ namespace MailArchiver.Services.Shared
 
         /// <summary>Forgets failed results (all = false) or every result (all = true) so they are read again. Returns the number of results removed.</summary>
         Task<int> RescanAsync(bool all, CancellationToken cancellationToken = default);
+
+        /// <summary>Forgets the NeedsOcr results so the OCR engine reads them (after the engine was switched on). Returns the number removed.</summary>
+        Task<int> RescanNeedsOcrAsync(CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -38,11 +43,12 @@ namespace MailArchiver.Services.Shared
         private readonly IStrippedContentHydrator _hydrator;
         private readonly AttachmentTextOptions _options;
         private readonly ILogger<AttachmentTextProcessor> _logger;
+        private readonly IOcrEngine? _ocr;
 
         public AttachmentTextProcessor(MailArchiverDbContext db, IStrippedContentHydrator hydrator,
-            IOptions<AttachmentTextOptions> options, ILogger<AttachmentTextProcessor> logger)
+            IOptions<AttachmentTextOptions> options, ILogger<AttachmentTextProcessor> logger, IOcrEngine? ocr = null)
         {
-            _db = db; _hydrator = hydrator; _options = options.Value; _logger = logger;
+            _db = db; _hydrator = hydrator; _options = options.Value; _logger = logger; _ocr = ocr;
         }
 
         private int MaxChars => Math.Max(1, _options.MaxTextKb) * 1024;
@@ -103,7 +109,12 @@ namespace MailArchiver.Services.Shared
 
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.TimeoutSeconds)));
-                return await Task.Run(() => AttachmentTextExtractor.Extract(bytes, att.FileName, att.ContentType, MaxChars, cts.Token), cts.Token);
+                var result = await Task.Run(() => AttachmentTextExtractor.Extract(bytes, att.FileName, att.ContentType, MaxChars, cts.Token), cts.Token);
+
+                // No text layer: with the OCR engine on and its models present, read the picture(s).
+                if (result.Status == AttachmentText.NeedsOcr && _options.UsesOcr && _ocr != null && _ocr.Unavailable == null)
+                    result = await OcrAsync(bytes, att.FileName, att.ContentType, result, ct);
+                return result;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -123,6 +134,76 @@ namespace MailArchiver.Services.Shared
         private static AttachmentTextResult Failed(string error)
             => new(AttachmentText.Failed, string.Empty, AttachmentText.TextLayer,
                 AttachmentTextExtractor.EngineName, AttachmentTextExtractor.EngineVersionValue, error);
+
+        private AttachmentTextResult OcrResult(string status, string text, string? error = null)
+            => new(status, text, AttachmentText.Ocr, _ocr!.Name, _ocr.Version, error);
+
+        /// <summary>
+        /// Reads a picture, or the pictures of a scanned PDF (at most Ocr:MaxPages pages), with the OCR engine. A picture with
+        /// no recognisable text is Done with empty text (it was read, there was nothing), so it is not read again.
+        /// A scan whose pages cannot be turned into pictures is Failed with the reason.
+        /// </summary>
+        private async Task<AttachmentTextResult> OcrAsync(byte[] bytes, string? fileName, string? contentType, AttachmentTextResult original, CancellationToken ct)
+        {
+            try
+            {
+                var source = AttachmentTextExtractor.OcrSourceOf(fileName, contentType);
+                if (source == AttachmentTextExtractor.OcrSource.None) return original;
+
+                var pieces = new List<(int Page, byte[] Bytes)>();
+                var skippedPages = new List<int>();
+                var pages = 1;
+                if (source == AttachmentTextExtractor.OcrSource.Image)
+                {
+                    pieces.Add((1, bytes));
+                }
+                else
+                {
+                    using var pdfCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    pdfCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.TimeoutSeconds)));
+                    var extracted = await Task.Run(() => PdfPageImages.Extract(bytes, _options.MaxPages, pdfCts.Token), pdfCts.Token);
+                    pages = extracted.Pages;
+                    skippedPages.AddRange(extracted.Skipped);
+                    pieces.AddRange(extracted.Images.Select(i => (i.Page, i.Bytes)));
+                }
+
+                var sb = new System.Text.StringBuilder();
+                string? firstError = null;
+                var readOne = false;
+                foreach (var piece in pieces)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    using var imageCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    imageCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.TimeoutSecondsPerImage)));
+                    OcrImageResult r;
+                    try { r = await _ocr!.RecognizeAsync(piece.Bytes, imageCts.Token); }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested) { r = new OcrImageResult(string.Empty, "ocr timeout"); }
+
+                    if (!r.Ok) { firstError ??= r.Error; continue; }
+                    readOne = true;
+                    if (r.Text.Length > 0) sb.Append(r.Text).Append('\n');
+                    if (sb.Length >= MaxChars) break;
+                }
+
+                var text = AttachmentTextExtractor.Clean(sb.ToString(), MaxChars);
+                if (text.Length > 0)
+                {
+                    var note = skippedPages.Count > 0 ? $"{skippedPages.Count} page(s) could not be read as pictures" : firstError;
+                    return OcrResult(AttachmentText.Done, text, note);
+                }
+                if (readOne && skippedPages.Count == 0 && firstError == null) return OcrResult(AttachmentText.Done, string.Empty);   // read, nothing there
+                if (pieces.Count == 0 && skippedPages.Count == 0) return OcrResult(AttachmentText.Done, string.Empty);                 // PDF without pictures
+                var reason = firstError ?? (skippedPages.Count > 0 ? "page pictures in an unsupported format" : "ocr found nothing readable");
+                return OcrResult(AttachmentText.Failed, string.Empty, reason);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (OperationCanceledException) { return OcrResult(AttachmentText.Failed, string.Empty, "ocr timeout"); }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("OCR of an attachment failed ({Error})", ex.GetType().Name);
+                return OcrResult(AttachmentText.Failed, string.Empty, "ocr failed: " + ex.GetType().Name);
+            }
+        }
 
         /// <summary>
         /// Emails with attachments whose attachments all have a result get their search text: the texts of their
@@ -182,7 +263,9 @@ namespace MailArchiver.Services.Shared
                 SELECT COUNT(*) AS ""Value"" FROM mail_archiver.""ArchivedEmails""
                 WHERE ""HasAttachments"" AND ""AttachmentTextAt"" IS NULL").SingleAsync(ct);
 
-            return new AttachmentTextStatus(_options.Mode, texts, pendingAttachments, awaiting);
+            return new AttachmentTextStatus(_options.Mode, texts, pendingAttachments, awaiting,
+                _options.UsesOcr && _ocr != null ? _ocr.Version : null,
+                _options.UsesOcr && _ocr != null ? _ocr.Unavailable : null);
         }
 
         public async Task<int> RescanAsync(bool all, CancellationToken ct = default)
@@ -196,9 +279,16 @@ namespace MailArchiver.Services.Shared
                 return removed;
             }
 
-            // Failed results only: drop them and send the emails that contain them back to the queue.
+            return await RescanStatusAsync("Failed", ct);
+        }
+
+        public Task<int> RescanNeedsOcrAsync(CancellationToken ct = default) => RescanStatusAsync("NeedsOcr", ct);
+
+        // Drops the results with this status and sends the emails that contain them back to the queue.
+        private async Task<int> RescanStatusAsync(string status, CancellationToken ct)
+        {
             return await _db.Database.ExecuteSqlRawAsync($@"
-                WITH del AS (DELETE FROM mail_archiver.""AttachmentTexts"" WHERE ""Status"" = 'Failed' RETURNING ""Sha256"")
+                WITH del AS (DELETE FROM mail_archiver.""AttachmentTexts"" WHERE ""Status"" = '{status}' RETURNING ""Sha256"")
                 UPDATE mail_archiver.""ArchivedEmails"" e SET ""AttachmentTextAt"" = NULL
                 WHERE e.""Id"" IN (
                     SELECT a.""ArchivedEmailId"" FROM mail_archiver.""EmailAttachments"" a
@@ -208,8 +298,8 @@ namespace MailArchiver.Services.Shared
     }
 
     /// <summary>
-    /// Runs <see cref="IAttachmentTextProcessor"/> in the background when Ocr:Mode is not off. cpu and gpu both
-    /// read the text layer only for now: no OCR engine is installed yet (that is the next step).
+    /// Runs <see cref="IAttachmentTextProcessor"/> in the background when Ocr:Mode is not off. cpu and gpu both use the CPU
+    /// OCR engine when its models are present; without them only the text layer is read and scans stay NeedsOcr.
     /// </summary>
     public sealed class AttachmentTextWorker : BackgroundService
     {
@@ -234,11 +324,29 @@ namespace MailArchiver.Services.Shared
                 _logger.LogError("Ocr:Mode '{Mode}' is not valid (off, cpu or gpu); attachment text stays off", _options.Mode);
                 return;
             }
-            _logger.LogWarning("Ocr:Mode={Mode}: no OCR engine is installed yet, only the text layer of attachments is read (scans and photos are marked NeedsOcr)", _options.Mode);
+            IOcrEngine? ocr;
+            using (var engineScope = _scopes.CreateScope()) ocr = engineScope.ServiceProvider.GetService<IOcrEngine>();
+            if (ocr != null && ocr.Unavailable == null)
+                _logger.LogInformation("Ocr:Mode={Mode}: OCR engine on ({Engine}); scans and photos are read, existing NeedsOcr items are queued again", _options.Mode, ocr.Name);
+            else
+                _logger.LogWarning("Ocr:Mode={Mode}: no OCR engine is available ({Reason}); only the text layer of attachments is read (scans and photos are marked NeedsOcr)",
+                    _options.Mode, ocr?.Unavailable ?? "not registered");
+            var requeue = ocr != null && ocr.Unavailable == null;
 
             try
             {
                 await Task.Delay(TimeSpan.FromMinutes(Math.Max(0, _options.StartupDelayMinutes)), stoppingToken);
+                if (requeue)
+                {
+                    try
+                    {
+                        using var scope = _scopes.CreateScope();
+                        var n = await scope.ServiceProvider.GetRequiredService<IAttachmentTextProcessor>().RescanNeedsOcrAsync(stoppingToken);
+                        if (n > 0) _logger.LogInformation("Queued {Count} earlier NeedsOcr result(s) for OCR", n);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+                    catch (Exception ex) { _logger.LogError(ex, "Could not queue NeedsOcr results for OCR"); }
+                }
                 while (!stoppingToken.IsCancellationRequested)
                 {
                     var work = 0;

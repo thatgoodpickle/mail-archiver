@@ -70,6 +70,15 @@ namespace MailArchiver.Services.Shared
         private static AttachmentTextResult Failed(string error)
             => new(AttachmentText.Failed, string.Empty, AttachmentText.TextLayer, EngineName, EngineVersionValue, error);
 
+        public enum OcrSource { None, Image, Pdf }
+
+        /// <summary>What an item needing OCR is: a picture, a PDF whose pages are pictures, or nothing the OCR engine reads.</summary>
+        public static OcrSource OcrSourceOf(string? fileName, string? contentType)
+        {
+            var kind = Classify(fileName, contentType);
+            return kind == Kind.Image ? OcrSource.Image : kind == Kind.Pdf ? OcrSource.Pdf : OcrSource.None;
+        }
+
         private enum Kind { Unknown, Pdf, Docx, Xlsx, Pptx, OpenDocument, Html, Message, Text, Image }
 
         private static Kind Classify(string? fileName, string? contentType)

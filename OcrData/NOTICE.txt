@@ -1,0 +1,4 @@
+latin_ppocrv5_dict.txt is the character dictionary (PostProcess.character_dict) of the PaddlePaddle model
+latin_PP-OCRv5_mobile_rec (https://huggingface.co/PaddlePaddle/latin_PP-OCRv5_mobile_rec), Apache License 2.0,
+copyright PaddlePaddle Authors. One character per line; the recogniser's classes are: blank, these 836 characters, space.
+The ONNX models themselves are downloaded when the Docker image is built (tools/fetch-ocr-models.sh), not stored here.

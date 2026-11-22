@@ -31,6 +31,8 @@ jobs:
           --health-retries 10
     env:
       MailArchiverTest__ConnectionStrings__DefaultConnection: "Host=localhost;Database=MailArchiver;Username=mailuser;Password=masterkey"
+      OCR_MODEL_DIR: ${{ github.workspace }}/ocr-models
+      OCR_REQUIRE_MODELS: "1"
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
@@ -39,6 +41,16 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+
+      # OCR models for the tests that run the real engine (pinned and hash-checked by the script; cached between runs)
+      - name: Cache OCR models
+        uses: actions/cache@v4
+        with:
+          path: ocr-models
+          key: ocr-models-${{ hashFiles('tools/fetch-ocr-models.sh') }}
+
+      - name: Fetch OCR models
+        run: tools/fetch-ocr-models.sh "$GITHUB_WORKSPACE/ocr-models"
 
       - name: Build
         run: dotnet build MailArchiver.sln -c Release

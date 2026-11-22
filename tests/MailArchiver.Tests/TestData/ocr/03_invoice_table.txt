@@ -1,0 +1,10 @@
+INVOICE No. 2026-00417 Date: 12/11/2026
+Customer: Example Trading Pty Ltd ABN 12 345 678 901
+Item Qty Unit Total
+Harbour survey 2 450.00 900.00
+Site inspection 5 120.50 602.50
+Report printing 10 8.75 87.50
+Subtotal 1,590.00
+GST 10% 159.00
+TOTAL DUE 1,749.00
+Pay by 12/12/2026. Account 062-000 / 1234 5678

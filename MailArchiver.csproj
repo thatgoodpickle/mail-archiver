@@ -54,5 +54,13 @@
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
     <!-- Fork: reads the text layer of PDF attachments for search (Apache-2.0). -->
     <PackageReference Include="PdfPig" Version="0.1.11" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.32.0" />
+    <PackageReference Include="SkiaSharp" Version="4.156.2" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.156.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- OCR character dictionary (Apache-2.0, see OcrData/NOTICE.txt); the ONNX models are fetched at image build time -->
+    <None Include="OcrData\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

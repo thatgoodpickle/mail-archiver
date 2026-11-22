@@ -2,6 +2,7 @@
 """Makes synthetic test images with KNOWN text, so any OCR engine can be scored exactly.
 
 Usage: make-ocr-samples.py <out-dir>
+       make-ocr-samples.py --test-resources <out-dir>   the few small files the C# tests use (committed under tests/.../TestData/ocr)
 Writes, per case, <name>.png (some also .jpg / a scan-like .pdf) and <name>.txt = the exact expected text in
 reading order. Everything is invented text (fake names, fake numbers); nothing is real. Deterministic (fixed seed).
 Requires Pillow and numpy and the usual DejaVu/Liberation/Noto fonts (paths below; missing fonts fall back to DejaVu).
@@ -132,7 +133,6 @@ for i, t in enumerate(right): d.text((660, 60 + i * 44), t, font=f, fill=0)
 cases["11_two_columns"] = (im, "png", left + right)
 
 out = sys.argv[1] if len(sys.argv) > 1 else "ocr-samples"
-os.makedirs(out, exist_ok=True)
 # The expected text, in reading order, with the table's column gaps collapsed to single spaces (the scorer ignores whitespace differences).
 EXPECTED = {
     "01_clean_print": ["Meeting notes, Tuesday 14 October 2026", "Attendees: Alice Example, Bob Sample, Carla Test.", "The committee approved the budget of 48,250 dollars for", "the harbour renovation. Work starts on 3 November and", "should finish before the end of February. Questions go", "to project@example.test or call 555 0142."],
@@ -147,6 +147,24 @@ EXPECTED = {
     "10_id_card_fake": ["SAMPLE STATE DRIVER LICENCE (SPECIMEN)", "Surname: SAMPLE", "Given names: JANE ALICE", "Licence no: 123456789", "Date of birth: 01/02/1990", "Expiry: 30/06/2029", "Address: 7 Test Street, Exampletown 2000"],
     "11_two_columns": left + right,
 }
+if len(sys.argv) > 2 and sys.argv[1] == "--test-resources":
+    # words chosen to be plain dictionary words in a plain font, so a test can search for one of them
+    words = page(["pelican zeppelin harmonica", "quiet kumquat orchard"], size=34, w=900, margin=40)
+    scan = page(["Scanned letter. The reference is harpsichord 4471."], size=30, w=1100, margin=60)
+    keep = {"01_clean_print": cases["01_clean_print"][0], "03_invoice_table": cases["03_invoice_table"][0],
+            "04_skewed_4deg": cases["04_skewed_4deg"][0], "06_accents": cases["06_accents"][0],
+            "09_white_on_dark": cases["09_white_on_dark"][0]}
+    os.makedirs(sys.argv[2], exist_ok=True)
+    for name, im in keep.items():
+        im.convert("L").save(os.path.join(sys.argv[2], name + ".png"), optimize=True)
+        open(os.path.join(sys.argv[2], name + ".txt"), "w", encoding="utf-8").write("\n".join(EXPECTED[name]) + "\n")
+    cases["05_noisy_photo"][0].convert("L").save(os.path.join(sys.argv[2], "05_noisy_photo.jpg"), quality=55)
+    open(os.path.join(sys.argv[2], "05_noisy_photo.txt"), "w", encoding="utf-8").write("\n".join(EXPECTED["05_noisy_photo"]) + "\n")
+    words.convert("L").save(os.path.join(sys.argv[2], "testwords.png"), optimize=True)
+    scan.convert("L").save(os.path.join(sys.argv[2], "scan.jpg"), quality=70)
+    sys.exit(0)
+
+os.makedirs(out, exist_ok=True)
 for name, spec in cases.items():
     im, ext = spec[0], spec[1]
     im = im.convert("L")

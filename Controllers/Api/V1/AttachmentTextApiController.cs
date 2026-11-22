@@ -28,19 +28,25 @@ public class AttachmentTextApiController : ApiControllerBase
             mode = s.Mode,
             texts = s.Texts.Select(t => new { status = t.Status, method = t.Method, count = t.Count }),
             pendingAttachments = s.PendingAttachments,
-            emailsAwaitingIndex = s.EmailsAwaitingIndex
+            emailsAwaitingIndex = s.EmailsAwaitingIndex,
+            ocrEngine = s.OcrEngine,
+            ocrUnavailable = s.OcrUnavailable
         });
     }
 
     /// <summary>
-    /// Reads attachments again. <c>scope=failed</c> (default) drops failed results only; <c>scope=all</c> drops every
+    /// Reads attachments again. <c>scope=failed</c> (default) drops failed results only; <c>scope=needsocr</c> drops the results
+    /// that wait for an OCR engine (the worker does this itself at start when the engine is available); <c>scope=all</c> drops every
     /// result and every email's search text. The worker does the reading afterwards; nothing is read inside this call.
     /// </summary>
     [HttpPost("rescan")]
     public async Task<IActionResult> Rescan([FromQuery] string scope = "failed")
     {
+        if (string.Equals(scope, "needsocr", StringComparison.OrdinalIgnoreCase))
+            return Ok(new { scope = "needsocr", removed = await _processor.RescanNeedsOcrAsync() });
+
         if (!string.Equals(scope, "failed", StringComparison.OrdinalIgnoreCase) && !string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase))
-            return Problem(statusCode: 400, title: "scope must be 'failed' or 'all'.");
+            return Problem(statusCode: 400, title: "scope must be 'failed', 'needsocr' or 'all'.");
 
         var removed = await _processor.RescanAsync(string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase));
         return Ok(new { scope = scope.ToLowerInvariant(), removed });

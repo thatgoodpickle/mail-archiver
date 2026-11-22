@@ -58,5 +58,28 @@ namespace MailArchiver.Models
 
         /// <summary>Seconds allowed per attachment.</summary>
         public int TimeoutSeconds { get; set; } = 60;
+
+        // ---- OCR engine (cpu mode) ----
+
+        /// <summary>Directory holding det.onnx and rec.onnx. Empty = "ocr-models" next to the application.</summary>
+        public string ModelDirectory { get; set; } = string.Empty;
+
+        /// <summary>auto or cpu. cuda, rocm and openvino are not built yet and fall back to cpu with a log line.</summary>
+        public string Provider { get; set; } = "auto";
+
+        /// <summary>CPU threads the OCR engine may use (one image at a time).</summary>
+        public int Threads { get; set; } = 2;
+
+        /// <summary>Images with more pixels than this are not read (checked before decoding). Default 25 million.</summary>
+        public long MaxImagePixels { get; set; } = 25_000_000;
+
+        /// <summary>Seconds allowed per image (and per PDF page).</summary>
+        public int TimeoutSecondsPerImage { get; set; } = 30;
+
+        /// <summary>Pages read per scanned PDF; further pages are ignored.</summary>
+        public int MaxPages { get; set; } = 20;
+
+        /// <summary>True for cpu and gpu (gpu falls back to the CPU engine for now).</summary>
+        public bool UsesOcr => string.Equals(Mode, "cpu", StringComparison.OrdinalIgnoreCase) || string.Equals(Mode, "gpu", StringComparison.OrdinalIgnoreCase);
     }
 }
