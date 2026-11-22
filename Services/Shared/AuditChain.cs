@@ -55,12 +55,20 @@ namespace MailArchiver.Services.Shared
             object? payload = null, CancellationToken cancellationToken = default)
         {
             if (!_options.Value.AuditChainEnabled) return null;
+
+            // F-21: the hash input is '|'-joined. Kind and Sha256 are code-controlled, so a '|' is a programming
+            // error; refusing it here makes an ambiguous hash input unreachable (Payload is last and free text).
+            if (kind.Contains('|') || (sha256 != null && sha256.Contains('|')))
+                throw new ArgumentException("Audit chain kind and hash must not contain '|'.");
+
             try
             {
                 // Own scope and context: callers may be inside a SaveChanges or a transaction of their own.
                 using var scope = _scopes.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<MailArchiverDbContext>();
                 await using var tx = await db.Database.BeginTransactionAsync(cancellationToken);
+                // F-20: never wait for the chain lock forever (a stuck session would stall every audited action).
+                await db.Database.ExecuteSqlRawAsync("SET LOCAL lock_timeout = '10s'", cancellationToken);
                 await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock({LockKey})", cancellationToken);
 
                 var last = await db.AuditChain.AsNoTracking().OrderByDescending(e => e.Seq).FirstOrDefaultAsync(cancellationToken);
@@ -83,10 +91,17 @@ namespace MailArchiver.Services.Shared
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Audit chain append failed for '{Kind}' (email {EmailId}); the action itself was not blocked", kind, emailId);
+                Interlocked.Increment(ref _failedAppends);
+                _logger.LogError(ex, "Audit chain append failed for '{Kind}' (email {EmailId}); the action itself was not blocked. " +
+                    "The audit trail now has a gap for it (GET api/v1/integrity/chain/head shows the failure count).", kind, emailId);
                 return null;
             }
         }
+
+        private static long _failedAppends;
+
+        /// <summary>Appends that failed since the application started (F-20): any value above 0 means audit entries are missing.</summary>
+        public static long FailedAppends => Interlocked.Read(ref _failedAppends);
     }
 
     public sealed record AuditChainHead(long Seq, string Hash, DateTime? Timestamp);
@@ -99,7 +114,8 @@ namespace MailArchiver.Services.Shared
         AuditChainHead? Head,
         AuditChainBreak? FirstBreak,
         IReadOnlyList<string> Warnings,
-        long EmailsWithoutArchiveEntry);
+        long EmailsWithoutArchiveEntry,
+        long EmailsDeletedWithRecord = 0);
 
     public interface IAuditChainVerifier
     {
@@ -168,13 +184,38 @@ namespace MailArchiver.Services.Shared
             foreach (var id in changed)
                 warnings.Add($"Email {id}: the stored original's hash differs from the hash recorded when it was archived.");
 
+            // F-05: an original that was stored and whose email is gone must be accounted for by an email.deleted entry.
+            var vanished = await _db.Database.SqlQueryRaw<int>(@"
+                SELECT DISTINCT c.""EmailId"" AS ""Value"" FROM mail_archiver.""AuditChain"" c
+                WHERE c.""Kind"" = 'original.stored' AND c.""EmailId"" IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM mail_archiver.""ArchivedEmails"" e WHERE e.""Id"" = c.""EmailId"")
+                  AND NOT EXISTS (SELECT 1 FROM mail_archiver.""AuditChain"" d WHERE d.""Kind"" = 'email.deleted' AND d.""EmailId"" = c.""EmailId"")
+                LIMIT 20").ToListAsync(cancellationToken);
+            foreach (var id in vanished)
+                warnings.Add($"Email {id} was removed without a deletion record in the chain.");
+
+            // F-05: the email is there and the chain says an original was stored, but its record is gone.
+            var rowGone = await _db.Database.SqlQueryRaw<int>(@"
+                SELECT DISTINCT c.""EmailId"" AS ""Value"" FROM mail_archiver.""AuditChain"" c
+                JOIN mail_archiver.""ArchivedEmails"" e ON e.""Id"" = c.""EmailId""
+                WHERE c.""Kind"" = 'original.stored'
+                  AND NOT EXISTS (SELECT 1 FROM mail_archiver.""RawMessages"" r WHERE r.""ArchivedEmailId"" = c.""EmailId"")
+                LIMIT 20").ToListAsync(cancellationToken);
+            foreach (var id in rowGone)
+                warnings.Add($"Email {id}: the chain records an original stored, but its record in the database is gone.");
+
+            var deletedCount = await _db.Database.SqlQueryRaw<long>(@"
+                SELECT count(*) AS ""Value"" FROM mail_archiver.""AuditChain"" WHERE ""Kind"" = 'email.deleted'")
+                .SingleAsync(cancellationToken);
+
             var unchained = await _db.Database.SqlQueryRaw<long>(@"
                 SELECT count(*) AS ""Value"" FROM mail_archiver.""RawMessages"" r
                 WHERE NOT EXISTS (SELECT 1 FROM mail_archiver.""AuditChain"" c
                                   WHERE c.""Kind"" = 'original.stored' AND c.""EmailId"" = r.""ArchivedEmailId"")")
                 .SingleAsync(cancellationToken);
 
-            return new AuditChainReport(broken == null && changed.Count == 0, count, head, broken, warnings, unchained);
+            return new AuditChainReport(broken == null && changed.Count == 0 && vanished.Count == 0 && rowGone.Count == 0,
+                count, head, broken, warnings, unchained, deletedCount);
         }
     }
 
@@ -187,6 +228,7 @@ namespace MailArchiver.Services.Shared
     {
         private readonly IServiceProvider _services;
         private readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbContext, List<RawMessage>> _pending = new();
+        private readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbContext, List<AccessLog>> _pendingAccess = new();
 
         // Resolved lazily: the interceptor is created while the DbContext options are built, and the
         // chain writer needs a DbContext of its own.
@@ -200,6 +242,11 @@ namespace MailArchiver.Services.Shared
             {
                 var added = ctx.ChangeTracker.Entries<RawMessage>().Where(e => e.State == EntityState.Added).Select(e => e.Entity).ToList();
                 if (added.Count > 0) _pending.AddOrUpdate(ctx, added);
+
+                // F-05: every access-log entry is chained, whichever code wrote it (several deletion and retention
+                // paths add AccessLogs rows directly instead of going through AccessLogService).
+                var access = ctx.ChangeTracker.Entries<AccessLog>().Where(e => e.State == EntityState.Added).Select(e => e.Entity).ToList();
+                if (access.Count > 0) _pendingAccess.AddOrUpdate(ctx, access);
             }
             return base.SavingChangesAsync(eventData, result, cancellationToken);
         }
@@ -208,6 +255,25 @@ namespace MailArchiver.Services.Shared
             SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default)
         {
             var ctx = eventData.Context;
+            if (ctx != null && _pendingAccess.TryGetValue(ctx, out var accessRows))
+            {
+                _pendingAccess.Remove(ctx);
+                var accessChain = _services.GetRequiredService<IAuditChain>();
+                foreach (var log in accessRows)
+                {
+                    var detail = $"{log.EmailSubject}\n{log.EmailFrom}\n{log.SearchParameters}";
+                    await accessChain.AppendAsync("access", log.EmailId, null, new
+                    {
+                        logId = log.Id,
+                        user = log.Username,
+                        type = log.Type.ToString(),
+                        mailAccountId = log.MailAccountId,
+                        at = log.Timestamp.ToString("O"),
+                        detailSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(detail))).ToLowerInvariant()
+                    }, cancellationToken);
+                }
+            }
+
             if (ctx != null && _pending.TryGetValue(ctx, out var rows))
             {
                 _pending.Remove(ctx);
@@ -227,7 +293,7 @@ namespace MailArchiver.Services.Shared
 
         public override Task SaveChangesFailedAsync(DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
         {
-            if (eventData.Context != null) _pending.Remove(eventData.Context);
+            if (eventData.Context != null) { _pending.Remove(eventData.Context); _pendingAccess.Remove(eventData.Context); }
             return base.SaveChangesFailedAsync(eventData, cancellationToken);
         }
     }

@@ -49,7 +49,7 @@ public class ManifestServiceTests : IAsyncLifetime
 
     private (ManifestService Svc, MailArchiverDbContext Db) NewService()
     {
-        var options = Opt.Create(new IntegrityOptions { ManifestPath = _dir });
+        var options = Opt.Create(new IntegrityOptions { ManifestPath = _dir, ManifestKeyPath = Path.Combine(_dir, "keys", "k.pem") });
         var services = new ServiceCollection();
         services.AddScoped(_ => NewContext());
         var chain = new AuditChain(services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(), options, NullLogger<AuditChain>.Instance);
@@ -161,6 +161,9 @@ public class ManifestServiceTests : IAsyncLifetime
 
             var check = await svc.VerifyAsync(info.Name);
             Assert.True(check!.EmailsChangedOrMissingSince >= 1);
+            // F-05: a changed hash is not "ok" any more (the old assertion only counted it).
+            Assert.False(check.Ok);
+            Assert.True(check.EmailsChanged >= 1);
         }
         finally { await CleanupAsync(account); }
     }
@@ -210,5 +213,63 @@ public class ManifestServiceTests : IAsyncLifetime
         using var pub = ECDsa.Create();
         pub.ImportFromPem(File.ReadAllText(Path.Combine(_dir, "public-key.pem")));
         Assert.Equal(Convert.ToHexString(SHA256.HashData(pub.ExportSubjectPublicKeyInfo())).ToLowerInvariant(), fp);
+    }
+
+    [Fact]
+    public async Task F05_ADeletionTheChainRecords_DoesNotFailTheManifest()
+    {
+        var account = await SeedEmailAsync();
+        var (svc, db) = NewService();
+        using var _ = db;
+        var info = await svc.CreateAsync("test");
+        await CleanupAsync(account);   // deletes through the database: the trigger chains it
+
+        var check = await svc.VerifyAsync(info.Name);
+        Assert.True(check!.EmailsChangedOrMissingSince >= 1);
+        Assert.Equal(0, check.EmailsMissingUnexplained);
+        Assert.True(check.Ok, string.Join("; ", check.Problems));
+    }
+
+    [Fact]
+    public async Task F05_AnEmailThatVanishedWithoutADeletionRecord_FailsTheManifest()
+    {
+        var account = await SeedEmailAsync();
+        var (svc, db) = NewService();
+        using var _ = db;
+        var info = await svc.CreateAsync("test");
+
+        // Someone with enough rights switches the deletion trigger off and deletes.
+        await ExecAsync(@"ALTER TABLE mail_archiver.""ArchivedEmails"" DISABLE TRIGGER audit_chain_email_deleted;
+            UPDATE mail_archiver.""ArchivedEmails"" SET ""IsLocked"" = false WHERE ""MailAccountId"" = " + account.Id + @";
+            DELETE FROM mail_archiver.""ArchivedEmails"" WHERE ""MailAccountId"" = " + account.Id + @";
+            ALTER TABLE mail_archiver.""ArchivedEmails"" ENABLE TRIGGER audit_chain_email_deleted;");
+        await using (var c = NewContext())
+            await c.MailAccounts.Where(a => a.Id == account.Id).ExecuteDeleteAsync();
+
+        var check = await svc.VerifyAsync(info.Name);
+        Assert.False(check!.Ok);
+        Assert.True(check.EmailsMissingUnexplained >= 1);
+    }
+
+    [Fact]
+    public async Task F12_ALostKeyIsNotSilentlyReplaced_WhenManifestsExist()
+    {
+        var (svc, db) = NewService();
+        using var _ = db;
+        await svc.CreateAsync("test");
+        File.Delete(Path.Combine(_dir, "keys", "k.pem"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.CreateAsync("test"));
+    }
+
+    [Fact]
+    public async Task F23_TheSigningKeyIsCreatedOwnerOnly()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var (svc, db) = NewService();
+        using var _ = db;
+        await svc.CreateAsync("test");
+        var mode = File.GetUnixFileMode(Path.Combine(_dir, "keys", "k.pem"));
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
     }
 }

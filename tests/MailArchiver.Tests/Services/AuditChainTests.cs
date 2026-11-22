@@ -258,4 +258,119 @@ public class AuditChainTests : IAsyncLifetime
             await c.MailAccounts.Where(a => a.Id == account.Id).ExecuteDeleteAsync();
         }
     }
+
+    // ---- review finding F-05: deletions are chained by a database trigger, and removed evidence is reported ----
+
+    private async Task<(MailAccount Account, int EmailId)> SeedChainedEmailAsync(IAuditChain chain)
+    {
+        var interceptor = new AuditChainInterceptor(new ServiceCollection().AddSingleton(chain).BuildServiceProvider());
+        MailAccount account;
+        await using (var setup = NewContext())
+        {
+            account = new MailAccount
+            {
+                Name = $"dl-{Guid.NewGuid():N}".Substring(0, 20), EmailAddress = $"{Guid.NewGuid():N}@test.local",
+                Provider = ProviderType.IMAP, IsEnabled = true, LastSync = DateTime.UtcNow
+            };
+            setup.MailAccounts.Add(account);
+            await setup.SaveChangesAsync();
+        }
+        await using var ctx = NewContext(interceptor);
+        var email = new ArchivedEmail
+        {
+            MailAccountId = account.Id, MessageId = Guid.NewGuid().ToString("N"), Subject = "s", From = "a@b.test", To = "c@d.test",
+            Body = "b", HtmlBody = "", Cc = "", Bcc = "", FolderName = "INBOX", SentDate = DateTime.UtcNow, ReceivedDate = DateTime.UtcNow,
+            RawMessage = new RawMessage { Sha256 = new string('7', 64), Size = 10, Source = "imap", StorageType = RawMessageStorage.Postgres, Content = new byte[] { 1 }, CreatedAt = DateTime.UtcNow }
+        };
+        ctx.ArchivedEmails.Add(email);
+        await ctx.SaveChangesAsync();
+        return (account, email.Id);
+    }
+
+    private async Task DropAccountAsync(MailAccount account)
+    {
+        await using var c = NewContext();
+        await c.Database.ExecuteSqlInterpolatedAsync($"UPDATE mail_archiver.\"ArchivedEmails\" SET \"IsLocked\" = false WHERE \"MailAccountId\" = {account.Id}");
+        await c.ArchivedEmails.Where(e => e.MailAccountId == account.Id).ExecuteDeleteAsync();
+        await c.MailAccounts.Where(a => a.Id == account.Id).ExecuteDeleteAsync();
+    }
+
+    [Fact]
+    public async Task F05_DeletingAnEmail_AppendsADeletedEntry_ThatTheCSharpVerifierAgreesWith()
+    {
+        var chain = NewChain();
+        var (account, emailId) = await SeedChainedEmailAsync(chain);
+        await DropAccountAsync(account);
+
+        await using var read = NewContext();
+        var entry = await read.AuditChain.AsNoTracking().SingleAsync(e => e.Kind == "email.deleted");
+        Assert.Equal(emailId, entry.EmailId);
+        Assert.Equal(new string('7', 64), entry.Sha256);   // the hash of the original that was removed
+
+        var r = await VerifyAsync();
+        Assert.True(r.Ok, string.Join("; ", r.Warnings) + " / " + r.FirstBreak?.Reason); // trigger hash == C# hash, chain linear
+        Assert.Equal(1, r.EmailsDeletedWithRecord);
+        Assert.Empty(r.Warnings);
+    }
+
+    [Fact]
+    public async Task F05_AnEmailRemovedWithoutADeletionRecord_IsReported()
+    {
+        var chain = NewChain();
+        var (account, emailId) = await SeedChainedEmailAsync(chain);
+
+        await ExecAsync(@"ALTER TABLE mail_archiver.""ArchivedEmails"" DISABLE TRIGGER audit_chain_email_deleted;
+            DELETE FROM mail_archiver.""ArchivedEmails"" WHERE ""MailAccountId"" = " + account.Id + @";
+            ALTER TABLE mail_archiver.""ArchivedEmails"" ENABLE TRIGGER audit_chain_email_deleted;");
+        await using (var c = NewContext())
+            await c.MailAccounts.Where(a => a.Id == account.Id).ExecuteDeleteAsync();
+
+        var r = await VerifyAsync();
+        Assert.False(r.Ok);
+        Assert.Contains(r.Warnings, w => w.Contains($"Email {emailId} was removed without a deletion record"));
+    }
+
+    [Fact]
+    public async Task F05_AnOriginalRecordThatVanishedWhileTheEmailRemains_IsReported()
+    {
+        var chain = NewChain();
+        var (account, emailId) = await SeedChainedEmailAsync(chain);
+        try
+        {
+            await ExecAsync($"DELETE FROM mail_archiver.\"RawMessages\" WHERE \"ArchivedEmailId\" = {emailId}");
+
+            var r = await VerifyAsync();
+            Assert.False(r.Ok);
+            Assert.Contains(r.Warnings, w => w.Contains($"Email {emailId}") && w.Contains("record in the database is gone"));
+        }
+        finally { await DropAccountAsync(account); }
+    }
+
+    [Fact]
+    public async Task F05_EveryAccessLogRow_IsChained_WhoeverWritesIt()
+    {
+        var chain = NewChain();
+        var interceptor = new AuditChainInterceptor(new ServiceCollection().AddSingleton(chain).BuildServiceProvider());
+        await using (var ctx = NewContext(interceptor))
+        {
+            ctx.AccessLogs.Add(new AccessLog { Username = "someone", Type = AccessLogType.Deletion, Timestamp = DateTime.UtcNow, EmailId = 12345, EmailSubject = "subject" });
+            await ctx.SaveChangesAsync();   // a writer that does not go through AccessLogService
+        }
+
+        await using var read = NewContext();
+        var entry = await read.AuditChain.AsNoTracking().SingleAsync(e => e.Kind == "access");
+        Assert.Equal(12345, entry.EmailId);
+        Assert.Contains("Deletion", entry.Payload);
+        Assert.True((await VerifyAsync()).Ok);
+
+        await read.AccessLogs.Where(a => a.Username == "someone").ExecuteDeleteAsync();
+    }
+
+    [Fact]
+    public async Task F21_AKindOrHashWithTheDelimiter_IsRefused()
+    {
+        var chain = NewChain();
+        await Assert.ThrowsAsync<ArgumentException>(() => chain.AppendAsync("bad|kind"));
+        await Assert.ThrowsAsync<ArgumentException>(() => chain.AppendAsync("ok", 1, "abc|def"));
+    }
 }

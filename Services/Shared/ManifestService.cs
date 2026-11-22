@@ -18,7 +18,9 @@ namespace MailArchiver.Services.Shared
         bool EntriesFileMatches,
         bool ChainStillContainsHead,
         long EmailsChangedOrMissingSince,
-        IReadOnlyList<string> Problems);
+        IReadOnlyList<string> Problems,
+        long EmailsChanged = 0,
+        long EmailsMissingUnexplained = 0);
 
     public interface IManifestService
     {
@@ -50,18 +52,30 @@ namespace MailArchiver.Services.Shared
         private readonly IntegrityOptions _options;
         private readonly IHostEnvironment _env;
         private readonly ILogger<ManifestService> _logger;
+        private readonly Microsoft.Extensions.Configuration.IConfiguration? _configuration;
 
         public ManifestService(MailArchiverDbContext db, IAuditChain chain, IAuditChainVerifier chainVerifier,
-            IOptions<IntegrityOptions> options, IHostEnvironment env, ILogger<ManifestService> logger)
+            IOptions<IntegrityOptions> options, IHostEnvironment env, ILogger<ManifestService> logger,
+            Microsoft.Extensions.Configuration.IConfiguration? configuration = null)
         {
             _db = db; _chain = chain; _chainVerifier = chainVerifier; _options = options.Value; _env = env; _logger = logger;
+            _configuration = configuration;
         }
 
         private string Dir => Path.IsPathRooted(_options.ManifestPath)
             ? _options.ManifestPath : Path.Combine(_env.ContentRootPath, _options.ManifestPath);
 
-        private string KeyPath => string.IsNullOrWhiteSpace(_options.ManifestKeyPath)
-            ? Path.Combine(Dir, "signing-key.pem") : _options.ManifestKeyPath;
+        // F-06: by default the private key lives with the DataProtection keys, not next to the manifests.
+        private string KeyPath
+        {
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(_options.ManifestKeyPath)) return _options.ManifestKeyPath;
+                var dp = _configuration?["DataProtection:KeyPath"];
+                var dir = string.IsNullOrWhiteSpace(dp) ? Path.Combine(_env.ContentRootPath, "DataProtection-Keys") : dp;
+                return Path.Combine(dir, "manifest-signing-key.pem");
+            }
+        }
 
         private string PublicKeyPath => Path.Combine(Dir, "public-key.pem");
 
@@ -76,10 +90,20 @@ namespace MailArchiver.Services.Shared
             }
             else
             {
+                // F-12: never replace the key behind existing manifests by accident.
+                if (!_options.AllowNewKey && Directory.EnumerateFiles(Dir, "manifest-*.json").Any())
+                    throw new InvalidOperationException(
+                        "The manifest signing key is missing but signed manifests already exist. Restore the key, " +
+                        "or set Integrity:AllowNewKey=true once to start a new key (older manifests then verify only with their own public key).");
+
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(KeyPath))!);
-                File.WriteAllText(KeyPath, ecdsa.ExportPkcs8PrivateKeyPem());
+                // F-23: created with 0600 from the first byte, not chmod-ed afterwards.
+                var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
                 if (!OperatingSystem.IsWindows())
-                    File.SetUnixFileMode(KeyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                    options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                using (var fs = new FileStream(KeyPath, options))
+                using (var writer = new StreamWriter(fs))
+                    writer.Write(ecdsa.ExportPkcs8PrivateKeyPem());
                 _logger.LogWarning("Created a new manifest signing key at {Path}", KeyPath);
             }
             // Always refreshed, so the public key file matches the key actually in use.
@@ -210,6 +234,8 @@ namespace MailArchiver.Services.Shared
 
             var entriesOk = false;
             var changed = 0L;
+            var changedHash = 0L;
+            var missingUnexplained = 0L;
             if (!File.Exists(entriesPath)) problems.Add("The entries file is missing.");
             else
             {
@@ -222,15 +248,29 @@ namespace MailArchiver.Services.Shared
                     // Compare with the database now: an original whose hash differs or whose row is gone.
                     var current = await _db.RawMessages.AsNoTracking()
                         .ToDictionaryAsync(r => r.ArchivedEmailId, r => r.Sha256, cancellationToken);
+                    // A manifest entry may vanish only through a recorded deletion (F-05).
+                    var deleted = (await _db.AuditChain.AsNoTracking()
+                        .Where(c => c.Kind == "email.deleted" && c.EmailId != null)
+                        .Select(c => c.EmailId!.Value).ToListAsync(cancellationToken)).ToHashSet();
                     foreach (var line in await File.ReadAllLinesAsync(entriesPath, cancellationToken))
                     {
                         if (line.Length == 0) continue;
                         using var l = JsonDocument.Parse(line);
                         var id = l.RootElement.GetProperty("emailId").GetInt32();
                         var sha = l.RootElement.GetProperty("sha256").GetString();
-                        if (!current.TryGetValue(id, out var now) || !string.Equals(now, sha, StringComparison.Ordinal)) changed++;
+                        if (!current.TryGetValue(id, out var now))
+                        {
+                            changed++;
+                            if (!deleted.Contains(id)) missingUnexplained++;
+                        }
+                        else if (!string.Equals(now, sha, StringComparison.Ordinal))
+                        {
+                            changed++;
+                            changedHash++;
+                        }
                     }
-                    if (changed > 0) problems.Add($"{changed} email(s) in the manifest are gone or hold a different original hash now (deleted emails show up here too).");
+                    if (changedHash > 0) problems.Add($"{changedHash} email(s) hold a different original hash now than in the manifest.");
+                    if (missingUnexplained > 0) problems.Add($"{missingUnexplained} email(s) in the manifest are gone without a deletion record in the audit chain.");
                 }
             }
 
@@ -245,9 +285,9 @@ namespace MailArchiver.Services.Shared
                 if (!chainOk) problems.Add($"Audit chain entry {seq} is missing or differs from the head recorded in the manifest.");
             }
 
-            // Deleted emails are legitimate, so "changed" alone does not fail the check; the other findings do.
-            var ok = sigOk && entriesOk && chainOk;
-            return new ManifestCheck(ok, name, sigOk, entriesOk, chainOk, changed, problems);
+            // A deletion that the chain records is legitimate; a changed hash or an unexplained disappearance is not (F-05).
+            var ok = sigOk && entriesOk && chainOk && changedHash == 0 && missingUnexplained == 0;
+            return new ManifestCheck(ok, name, sigOk, entriesOk, chainOk, changed, problems, changedHash, missingUnexplained);
         }
     }
 }

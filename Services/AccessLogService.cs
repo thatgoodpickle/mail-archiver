@@ -16,12 +16,10 @@ namespace MailArchiver.Services
     public class AccessLogService : IAccessLogService
     {
         private readonly MailArchiverDbContext _context;
-        private readonly MailArchiver.Services.Shared.IAuditChain? _auditChain;
 
-        public AccessLogService(MailArchiverDbContext context, MailArchiver.Services.Shared.IAuditChain? auditChain = null)
+        public AccessLogService(MailArchiverDbContext context)
         {
             _context = context;
-            _auditChain = auditChain;
         }
 
         public async Task LogAccessAsync(string username, AccessLogType type, int? emailId = null, string emailSubject = null, string emailFrom = null, string searchParameters = null, int? mailAccountId = null)
@@ -40,23 +38,8 @@ namespace MailArchiver.Services
 
             _context.AccessLogs.Add(logEntry);
             await _context.SaveChangesAsync();
-
-            // Fork: chain the entry. The free-text fields (subject, sender, search terms) go in as one
-            // hash, so editing them later in AccessLogs is detectable without copying them again.
-            if (_auditChain != null)
-            {
-                var detail = $"{emailSubject}\n{emailFrom}\n{searchParameters}";
-                await _auditChain.AppendAsync("access", emailId, null, new
-                {
-                    logId = logEntry.Id,
-                    user = username,
-                    type = type.ToString(),
-                    mailAccountId,
-                    at = logEntry.Timestamp.ToString("O"),
-                    detailSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-                        System.Text.Encoding.UTF8.GetBytes(detail))).ToLowerInvariant()
-                });
-            }
+            // Fork: the audit chain entry for this row is appended by AuditChainInterceptor after the save
+            // (it covers every code path that writes AccessLogs, not only this service).
         }
 
         public async Task<List<AccessLog>> GetLogsForUserAsync(string username, int limit = 100)
