@@ -1,7 +1,7 @@
 # Test stack for the fork's lean storage (branch `integrity`). Use a DUMMY mailbox or EML
 # import here, not real mail, until the verify-all job exists.
 #
-#   mkdir -p originals pgdata logs keys
+#   mkdir -p originals pgdata logs keys manifests
 #   export DB_PASSWORD='<long random>' ADMIN_PASSWORD='<long random>'
 #   docker compose -f deploy/compose.lean-test.yml up -d
 #
@@ -31,6 +31,7 @@ services:
       - ./originals:/data/originals       # the evidence: back this up first
       - ./logs:/app/logs
       - ./keys:/app/DataProtection-Keys
+      - ./manifests:/app/Manifests         # signed manifests and the signing key: must survive a container recreate
     depends_on:
       postgres:
         condition: service_healthy
