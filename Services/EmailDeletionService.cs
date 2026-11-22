@@ -315,8 +315,17 @@ namespace MailArchiver.Services
                     }));
                 }
 
-                context.ArchivedEmails.RemoveRange(emailsToDelete);
-                await context.SaveChangesAsync(combinedToken);
+                // Delete memory: the reason travels in the same transaction as the removal and the access-log
+                // rows, so the database writes the deletion marker. The access-log rows are saved first inside
+                // that transaction: their chain entries are appended by the interceptor right after that save,
+                // which must happen BEFORE the delete trigger takes the chain lock (it holds it until commit).
+                await DeleteReasonScope.RunAsync(context, DeleteReasons.User, async () =>
+                {
+                    if (accessLogService != null)
+                        await context.SaveChangesAsync(combinedToken);
+                    context.ArchivedEmails.RemoveRange(emailsToDelete);
+                    await context.SaveChangesAsync(combinedToken);
+                }, combinedToken);
 
                 // The original files go after the rows are gone; see IRawMessageStore.DeleteAsync.
                 if (rawMessageStore != null)
@@ -438,9 +447,11 @@ namespace MailArchiver.Services
                         await context.SaveChangesAsync(combinedToken);
                     }
 
-                    await context.ArchivedEmails
+                    // Delete memory: a filter-based job is a deliberate deletion by a person (a spec-table site the
+                    // grep list missed: it deletes through ExecuteDeleteAsync inside the transaction above).
+                    await DeleteReasonScope.RunAsync(context, DeleteReasons.User, () => context.ArchivedEmails
                         .Where(e => ids.Contains(e.Id))
-                        .ExecuteDeleteAsync(combinedToken);
+                        .ExecuteDeleteAsync(combinedToken), combinedToken);
 
                     if (transaction != null)
                         await transaction.CommitAsync(combinedToken);

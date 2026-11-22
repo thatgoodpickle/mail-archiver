@@ -153,7 +153,7 @@ namespace MailArchiver.Services.Providers.Graph
                         {
                             var emailId = archivedEmail.Id;
                             _context.ChangeTracker.Clear();
-                            await _context.ArchivedEmails.Where(e => e.Id == emailId).ExecuteDeleteAsync();
+                            await DeleteReasonScope.RunAsync(_context, DeleteReasons.Internal, () => _context.ArchivedEmails.Where(e => e.Id == emailId).ExecuteDeleteAsync());
                         }
                         throw;
                     }

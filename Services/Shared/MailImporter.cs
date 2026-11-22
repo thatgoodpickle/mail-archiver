@@ -300,7 +300,7 @@ namespace MailArchiver.Services.Shared
                         {
                             var emailId = archivedEmail.Id;
                             context.ChangeTracker.Clear();
-                            await context.ArchivedEmails.Where(e => e.Id == emailId).ExecuteDeleteAsync();
+                            await DeleteReasonScope.RunAsync(context, DeleteReasons.Internal, () => context.ArchivedEmails.Where(e => e.Id == emailId).ExecuteDeleteAsync());
                         }
                         throw;
                     }

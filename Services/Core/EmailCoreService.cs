@@ -2212,7 +2212,8 @@ namespace MailArchiver.Services.Core
             try
             {
                 _context.ChangeTracker.Clear();
-                await _context.ArchivedEmails.Where(e => e.Id == email.Id).ExecuteDeleteAsync();
+                // Delete memory: a rollback of our own insert is never a deliberate deletion, so it never leaves a marker.
+                await DeleteReasonScope.RunAsync(_context, DeleteReasons.Internal, () => _context.ArchivedEmails.Where(e => e.Id == email.Id).ExecuteDeleteAsync());
             }
             catch (Exception ex)
             {
@@ -2611,9 +2612,11 @@ namespace MailArchiver.Services.Core
                             .ExecuteDeleteAsync();
 
                         // Delete emails
-                        var emailsDeleted = await _context.ArchivedEmails
+                        // Delete memory: ExecuteDeleteAsync runs outside any transaction, so one is opened here to carry the
+                        // reason; the database then writes the marker in the same transaction as the delete.
+                        var emailsDeleted = await DeleteReasonScope.RunAsync(_context, DeleteReasons.Retention, () => _context.ArchivedEmails
                             .Where(e => batchIds.Contains(e.Id))
-                            .ExecuteDeleteAsync();
+                            .ExecuteDeleteAsync());
 
                         deletedCount += emailsDeleted;
 

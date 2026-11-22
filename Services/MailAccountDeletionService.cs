@@ -335,8 +335,12 @@ namespace MailArchiver.Services
 
                 var batchIds = batch.Select(e => e.Id).ToList();
 
-                context.ArchivedEmails.RemoveRange(batch);
-                await context.SaveChangesAsync(cancellationToken);
+                // Delete memory: deleting an account is a full reset: reason 'account', no markers.
+                await DeleteReasonScope.RunAsync(context, DeleteReasons.Account, async () =>
+                {
+                    context.ArchivedEmails.RemoveRange(batch);
+                    await context.SaveChangesAsync(cancellationToken);
+                }, cancellationToken);
 
                 // The original files go after the rows are gone; see IRawMessageStore.DeleteAsync.
                 if (rawMessageStore != null)

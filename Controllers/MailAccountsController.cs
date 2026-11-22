@@ -1501,7 +1501,8 @@ namespace MailArchiver.Controllers
             // Finally delete the account
             _context.MailAccounts.Remove(account);
 
-            await _context.SaveChangesAsync();
+            // Delete memory: deleting an account is a full reset: reason 'account', no markers (they go with the account).
+            await DeleteReasonScope.RunAsync(_context, DeleteReasons.Account, () => _context.SaveChangesAsync());
 
             // The original files go after the rows are gone; see IRawMessageStore.DeleteAsync.
             var rawMessageStore = HttpContext.RequestServices.GetService<IRawMessageStore>();

@@ -3164,8 +3164,12 @@ namespace MailArchiver.Controllers
             
             try
             {
-                _context.ArchivedEmails.Remove(email);
-                await _context.SaveChangesAsync();
+                // Delete memory: one transaction that carries the reason, so the database writes the deletion marker.
+                await DeleteReasonScope.RunAsync(_context, DeleteReasons.User, async () =>
+                {
+                    _context.ArchivedEmails.Remove(email);
+                    await _context.SaveChangesAsync();
+                });
 
                 await DeleteStoredOriginalAsync(id);
                 
@@ -3307,8 +3311,11 @@ namespace MailArchiver.Controllers
                     
                     try
                     {
-                        _context.ArchivedEmails.Remove(email);
-                        await _context.SaveChangesAsync();
+                        await DeleteReasonScope.RunAsync(_context, DeleteReasons.User, async () =>
+                        {
+                            _context.ArchivedEmails.Remove(email);
+                            await _context.SaveChangesAsync();
+                        });
                         deletedCount++;
 
                         await DeleteStoredOriginalAsync(id);
