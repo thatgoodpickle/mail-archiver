@@ -10,9 +10,13 @@ namespace MailArchiver.Services.Shared
 {
     public sealed record OriginalBinStatus(
         bool Enabled, bool Applicable, string? NotApplicableReason, int BinRetentionDays, int IntervalHours, int MaxFilesPerRun,
-        int InBin, long InBinBytes, DateTime? EarliestPurgeAt, long TotalBinned, long TotalRestored, long TotalPurged, OriginalCleanupRun? LastRun);
+        int InBin, long InBinBytes, DateTime? EarliestPurgeAt, long TotalBinned, long TotalRestored, long TotalPurged, OriginalCleanupRun? LastRun,
+        ArchiveIdentityCheck? Identity = null);
 
     public sealed record OriginalBinItem(string Sha256, DateTime BinnedAt, DateTime PurgeAfter, long Size);
+
+    /// <summary>A live original that no email refers to and that has NO delete request: listed for an administrator, never moved by a run.</summary>
+    public sealed record UnclaimedOriginal(string Sha256, long Size, DateTime Modified);
 
     public sealed record OriginalRestoreResult(bool Restored, string Message);
 
@@ -25,10 +29,22 @@ namespace MailArchiver.Services.Shared
         /// already active. Throws InvalidOperationException (with the reason) when the bin is switched off or does
         /// not apply to this archive. Accepts no path: it only ever works on hash-named files under the originals folder.
         /// </summary>
-        Task<OriginalCleanupRun> StartAsync(string? startedBy);
+        Task<OriginalCleanupRun> StartAsync(string? startedBy, bool overrideBreaker = false);
 
         /// <summary>Runs one pass and waits for it (scheduler, tests). Same rules as <see cref="StartAsync"/>.</summary>
-        Task<OriginalCleanupRun> RunOnceAsync(string? startedBy, CancellationToken cancellationToken = default);
+        Task<OriginalCleanupRun> RunOnceAsync(string? startedBy, CancellationToken cancellationToken = default, bool overrideBreaker = false);
+
+        /// <summary>Whether the database and the originals folder belong together (the Trash does not run otherwise).</summary>
+        Task<ArchiveIdentityCheck> GetIdentityAsync();
+
+        /// <summary>The explicit admin step: declares this database the owner of the originals folder. Audited.</summary>
+        Task<ArchiveIdentityCheck> AdoptAsync(string? actor);
+
+        /// <summary>Live originals that no email refers to and that have no delete request (read-only; scans the folder).</summary>
+        Task<IReadOnlyList<UnclaimedOriginal>> ListUnclaimedAsync(int limit);
+
+        /// <summary>Explicitly moves ONE unclaimed original (by SHA-256) to the Trash. Audited. Refuses a referenced file.</summary>
+        Task<OriginalRestoreResult> MoveToTrashAsync(string sha256, string? actor);
 
         Task WaitForCurrentAsync();
         Task<OriginalBinStatus> GetStatusAsync();
@@ -42,9 +58,11 @@ namespace MailArchiver.Services.Shared
     }
 
     /// <summary>
-    /// Recycle bin for hash-named originals (review F-11). Hash-named files are shared by byte-identical emails, so a
-    /// file is only ever touched when NO RawMessages row refers to it, re-checked immediately before each move and after
-    /// it. Unreferenced files are MOVED to <c>.bin/</c> (same layout, atomic rename), kept for
+    /// Garbage collector with a recycle bin for hash-named originals (review F-11, second review N-01). Hash-named files are
+    /// shared by byte-identical emails, so a file is only ever touched when (1) a delete request for its hash is in the audit
+    /// chain (an 'email.deleted' entry), (2) NO RawMessages row refers to it (re-checked immediately before each move and after
+    /// it), (3) the database and the originals folder belong together (archive identity), and (4) the run passes the circuit
+    /// breaker. Files that fail (1) are only listed. Collected files are MOVED to <c>.bin/</c> (same layout, atomic rename), kept for
     /// <see cref="OriginalCleanupOptions.BinRetentionDays"/> days, restored when a row refers to them again, and purged
     /// after that. Every move, restore and purge is written to the audit chain first (a purge is irreversible, so it is
     /// never done without its record) and summarised in the access log. One pass at a time per process.
@@ -68,6 +86,8 @@ namespace MailArchiver.Services.Shared
         private readonly IOptionsMonitor<IntegrityOptions> _integrity;
         private readonly ILogger<OriginalBin> _logger;
         private readonly object _gate = new();
+        /// <summary>One operation at a time across scheduled runs, admin runs, restores and manual moves (second review N-08).</summary>
+        private readonly SemaphoreSlim _opGate = new(1, 1);
         private Task? _current;
         private int _currentRunId;
 
@@ -138,7 +158,7 @@ namespace MailArchiver.Services.Shared
             return true;
         }
 
-        public async Task<OriginalCleanupRun> StartAsync(string? startedBy)
+        public async Task<OriginalCleanupRun> StartAsync(string? startedBy, bool overrideBreaker = false)
         {
             if (!CanRun(out var reason)) throw new InvalidOperationException(reason);
 
@@ -170,14 +190,14 @@ namespace MailArchiver.Services.Shared
                     return db.OriginalCleanupRuns.AsNoTracking().First(r => r.Id == _currentRunId);
                 }
                 _currentRunId = run.Id;
-                _current = Task.Run(() => ExecuteAsync(run.Id, startedBy));
+                _current = Task.Run(() => ExecuteAsync(run.Id, startedBy, overrideBreaker));
             }
             return run;
         }
 
-        public async Task<OriginalCleanupRun> RunOnceAsync(string? startedBy, CancellationToken cancellationToken = default)
+        public async Task<OriginalCleanupRun> RunOnceAsync(string? startedBy, CancellationToken cancellationToken = default, bool overrideBreaker = false)
         {
-            var run = await StartAsync(startedBy);
+            var run = await StartAsync(startedBy, overrideBreaker);
             await WaitForCurrentAsync().WaitAsync(cancellationToken);
             using var scope = _scopes.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MailArchiverDbContext>();
@@ -188,9 +208,9 @@ namespace MailArchiver.Services.Shared
 
         // ----- the pass --------------------------------------------------------------------------------------
 
-        private sealed class Counters { public int Scanned, Referenced, Binned, Restored, Purged, Deferred, Errors; }
+        private sealed class Counters { public int Scanned, Referenced, Binned, Restored, Purged, Deferred, Errors, Unclaimed, Adopted, TempCleaned, TextsCleaned; public string? Alarm; }
 
-        private async Task ExecuteAsync(int runId, string? startedBy)
+        private async Task ExecuteAsync(int runId, string? startedBy, bool overrideBreaker)
         {
             var c = new Counters();
             var status = OriginalCleanupRun.Completed;
@@ -199,16 +219,32 @@ namespace MailArchiver.Services.Shared
             using var scope = _scopes.CreateScope();
             var sp = scope.ServiceProvider;
             var db = sp.GetRequiredService<MailArchiverDbContext>();
+            var gateHeld = false;
             try
             {
+                await _opGate.WaitAsync(ct); gateHeld = true;
                 var paths = sp.GetRequiredService<RawMessagePathResolver>();
                 var baseFull = Path.GetFullPath(paths.BasePath);
                 if (Directory.Exists(baseFull))
                 {
-                    var ctx = new Ctx(db, paths, baseFull, sp.GetService<IAuditChain>(), c);
-                    await RestorePhaseAsync(ctx, ct);
-                    await BinPhaseAsync(ctx, ct);
-                    await PurgePhaseAsync(ctx, ct);
+                    // Second review N-01(c): the database must be the one these originals belong to, or nothing is touched.
+                    var identity = await sp.GetRequiredService<IArchiveIdentityService>().CheckAsync(baseFull, ct);
+                    if (!identity.Ok)
+                    {
+                        c.Alarm = identity.Message;
+                        _logger.LogError("Original Trash refused to run: {Message}", identity.Message);
+                    }
+                    else
+                    {
+                        var ctx = new Ctx(db, paths, baseFull, sp.GetService<IAuditChain>(), c);
+                        await ReconcilePhaseAsync(ctx, ct);
+                        await RestorePhaseAsync(ctx, ct);
+                        await BinPhaseAsync(ctx, overrideBreaker, ct);
+                        await PurgePhaseAsync(ctx, ct);
+                        CleanTempFiles(ctx);
+                        await CleanAttachmentTextsAsync(ctx, ct);
+                    }
+                    if (c.Alarm != null) status = OriginalCleanupRun.Refused;
                 }
             }
             catch (OperationCanceledException) { status = OriginalCleanupRun.Failed; error = "Stopped (application shutting down)."; }
@@ -217,6 +253,7 @@ namespace MailArchiver.Services.Shared
                 status = OriginalCleanupRun.Failed; error = ex.Message;
                 _logger.LogError(ex, "Original bin run {RunId} failed", runId);
             }
+            finally { if (gateHeld) _opGate.Release(); }
 
             try
             {
@@ -225,13 +262,17 @@ namespace MailArchiver.Services.Shared
                     .SetProperty(r => r.Scanned, c.Scanned).SetProperty(r => r.Referenced, c.Referenced)
                     .SetProperty(r => r.Binned, c.Binned).SetProperty(r => r.Restored, c.Restored)
                     .SetProperty(r => r.Purged, c.Purged).SetProperty(r => r.Deferred, c.Deferred)
-                    .SetProperty(r => r.Errors, c.Errors).SetProperty(r => r.Error, error));
-                if (c.Binned + c.Restored + c.Purged + c.Errors > 0)
-                    _logger.LogInformation("Original bin run {RunId}: {Binned} binned, {Restored} restored, {Purged} purged, {Deferred} deferred, {Errors} errors", runId, c.Binned, c.Restored, c.Purged, c.Deferred, c.Errors);
+                    .SetProperty(r => r.Errors, c.Errors).SetProperty(r => r.Error, error)
+                    .SetProperty(r => r.Unclaimed, c.Unclaimed).SetProperty(r => r.Alarm, c.Alarm));
+                if (c.Binned + c.Restored + c.Purged + c.Errors + c.Adopted > 0 || c.Alarm != null)
+                    _logger.LogInformation("Original bin run {RunId}: {Binned} binned, {Restored} restored, {Purged} purged, {Deferred} deferred, {Unclaimed} unclaimed, {Adopted} adopted, {Errors} errors{Alarm}",
+                        runId, c.Binned, c.Restored, c.Purged, c.Deferred, c.Unclaimed, c.Adopted, c.Errors, c.Alarm == null ? "" : " (REFUSED: " + c.Alarm + ")");
                 var access = sp.GetService<IAccessLogService>();
-                if (access != null && c.Binned + c.Restored + c.Purged + c.Errors > 0)
-                    await access.LogAccessAsync(startedBy ?? "system", AccessLogType.Integrity,
-                        searchParameters: $"Trash run {runId}: {c.Binned} moved to the Trash, {c.Restored} restored, {c.Purged} erased for good, {c.Errors} errors");
+                if (access != null && c.Binned + c.Restored + c.Purged + c.Errors + c.Adopted > 0 || (access != null && c.Alarm != null))
+                    await access!.LogAccessAsync(startedBy ?? "system", AccessLogType.Integrity,
+                        searchParameters: c.Alarm != null
+                            ? $"Trash run {runId} refused: {c.Alarm}"
+                            : $"Trash run {runId}: {c.Binned} moved to the Trash, {c.Restored} restored, {c.Purged} erased for good, {c.Errors} errors");
             }
             catch (Exception ex) { _logger.LogError(ex, "Could not record the end of original bin run {RunId}", runId); }
         }
@@ -290,9 +331,11 @@ namespace MailArchiver.Services.Shared
                 if (!liveExists)
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(live)!);
+                    // N-08: mark it "in use" BEFORE it becomes visible at the live path (a rename keeps the time), so a run that
+                    // starts right after cannot see an old unreferenced file and bin it again.
+                    if (hold) { try { File.SetLastWriteTimeUtc(bin, DateTime.UtcNow); } catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { } }
                     File.Move(bin, live, overwrite: false);
                     if (HashFile(live) != sha) { x.C.Errors++; _logger.LogError("Restored file {Sha} does not verify", sha); return false; }
-                    if (hold) File.SetLastWriteTimeUtc(live, DateTime.UtcNow);
                 }
                 else if (binExists)
                 {
@@ -309,51 +352,138 @@ namespace MailArchiver.Services.Shared
             }
         }
 
-        // ----- phase 2: move unreferenced live files into the bin --------------------------------------------
+        // ----- phase 0: reconcile the bin folder with its entries (second review N-03) ----------------------------
 
-        private async Task BinPhaseAsync(Ctx x, CancellationToken ct)
+        /// <summary>
+        /// A crash between the steps of a move can leave an entry without its file in the Trash (the file is still live) or a file
+        /// in <c>.bin/</c> without an entry. This pass tidies both before anything else: stale entries are cleared, and unlisted
+        /// files found in the Trash are adopted (verified, recorded, and then restored or purged by the normal phases).
+        /// </summary>
+        private async Task ReconcilePhaseAsync(Ctx x, CancellationToken ct)
         {
-            var options = new EnumerationOptions
+            // 1. entries whose Trash file is gone while the live file is there: the move never happened.
+            var after = string.Empty;
+            while (true)
             {
-                RecurseSubdirectories = true, IgnoreInaccessible = true,
-                AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System
-            };
-            var pending = new List<string>(Batch);
-            var stop = false;
-
-            async Task FlushAsync()
-            {
-                if (pending.Count == 0 || stop) { pending.Clear(); return; }
-                var refs = (await x.Db.RawMessages.AsNoTracking().Where(r => pending.Contains(r.StoragePath)).Select(r => r.StoragePath).ToListAsync(ct)).ToHashSet();
-                foreach (var rel in pending)
+                var batch = await x.Db.OriginalBinEntries.AsNoTracking().Where(e => string.Compare(e.StoragePath, after) > 0)
+                    .OrderBy(e => e.StoragePath).Take(Batch).ToListAsync(ct);
+                if (batch.Count == 0) break;
+                after = batch[^1].StoragePath;
+                foreach (var e in batch)
                 {
-                    if (refs.Contains(rel)) { x.C.Referenced++; continue; }
-                    if (x.C.Binned >= Opt.MaxFilesPerRun) { x.C.Deferred++; stop = true; continue; }
-                    await BinOneAsync(x, rel, ct);
+                    ct.ThrowIfCancellationRequested();
+                    if (!TryParseLive(e.StoragePath, out var sha) || sha != e.Sha256 || e.BinPath != BinRel(sha)) continue;
+                    var live = Abs(x, e.StoragePath); var bin = Abs(x, e.BinPath);
+                    if (!IsSafe(live, x.BaseFull) || !IsSafe(bin, x.BaseFull)) continue;
+                    if (File.Exists(bin) || !File.Exists(live)) continue;
+                    if (!await RecordAsync(x, "original.restored", sha, new { storagePath = e.StoragePath, binPath = e.BinPath, reason = "the move to the Trash never completed (found at the next run)", liveCopyExisted = true }, ct)) { x.C.Errors++; continue; }
+                    await x.Db.OriginalBinEntries.Where(b => b.StoragePath == e.StoragePath).ExecuteDeleteAsync(ct);
                 }
-                pending.Clear();
             }
 
-            foreach (var file in Directory.EnumerateFiles(x.BaseFull, "*.eml.gz", options))
+            // 2. files in the Trash that no entry lists.
+            var binRoot = Path.Combine(x.BaseFull, OriginalCleanupOptions.BinFolder);
+            if (!Directory.Exists(binRoot) || !IsSafe(binRoot + Path.DirectorySeparatorChar + "x", x.BaseFull)) return;
+            var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System };
+            foreach (var file in Directory.EnumerateFiles(binRoot, "*.eml.gz", options))
             {
                 ct.ThrowIfCancellationRequested();
-                var rel = Path.GetRelativePath(x.BaseFull, file).Replace('\\', '/');
-                if (rel.StartsWith(OriginalCleanupOptions.BinFolder + "/", StringComparison.Ordinal)) continue;   // the bin is not live
-                if (!TryParseLive(rel, out _)) continue;                                                         // id-named or anything else: not ours
-                x.C.Scanned++;
-                pending.Add(rel);
-                if (pending.Count >= Batch) await FlushAsync();
-                if (stop) break;
+                var rel = Path.GetRelativePath(binRoot, file).Replace('\\', '/');
+                if (!TryParseLive(rel, out var sha)) continue;
+                var storagePath = LiveRel(sha);
+                if (await x.Db.OriginalBinEntries.AsNoTracking().AnyAsync(e => e.StoragePath == storagePath, ct)) continue;
+                if (!IsSafe(file, x.BaseFull)) { x.C.Errors++; continue; }
+                if (HashFile(file) != sha) { x.C.Errors++; _logger.LogError("A file in the Trash does not match its own name and has no entry; left alone: {Sha}", sha); continue; }
+                if (!await RecordAsync(x, "original.binned", sha, new { storagePath, binPath = BinRel(sha), reason = "found in the Trash without a record; adopted", retentionDays = Opt.BinRetentionDays }, ct)) { x.C.Errors++; continue; }
+                x.Db.OriginalBinEntries.Add(new OriginalBinEntry { StoragePath = storagePath, Sha256 = sha, BinPath = BinRel(sha), BinnedAt = AuditChainHash.TruncateToMicroseconds(DateTime.UtcNow), Size = new FileInfo(file).Length });
+                await x.Db.SaveChangesAsync(ct);
+                x.C.Adopted++;
             }
-            await FlushAsync();
         }
 
-        private async Task BinOneAsync(Ctx x, string rel, CancellationToken ct)
+        // ----- phase 2: move unreferenced live files into the bin --------------------------------------------
+
+        private static string ShaOf(string liveRel) => liveRel.Substring(liveRel.LastIndexOf('/') + 1, 64);
+
+        /// <summary>All live hash-named files below the originals folder (relative paths); the bin and anything not ours are skipped.</summary>
+        private static List<string> ListLive(string baseFull, CancellationToken ct)
         {
+            var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System };
+            var live = new List<string>();
+            foreach (var file in Directory.EnumerateFiles(baseFull, "*.eml.gz", options))
+            {
+                ct.ThrowIfCancellationRequested();
+                var rel = Path.GetRelativePath(baseFull, file).Replace('\\', '/');
+                if (rel.StartsWith(OriginalCleanupOptions.BinFolder + "/", StringComparison.Ordinal)) continue;   // the bin is not live
+                if (!TryParseLive(rel, out _)) continue;                                                         // id-named or anything else: not ours
+                live.Add(rel);
+            }
+            return live;
+        }
+
+        /// <summary>The live files no row refers to, split into those with a delete request in the chain and those without.</summary>
+        private async Task<(List<string> Eligible, List<string> Unclaimed, int Referenced)> ClassifyAsync(MailArchiverDbContext db, List<string> live, CancellationToken ct)
+        {
+            var unreferenced = new List<string>(); var referenced = 0;
+            for (var i = 0; i < live.Count; i += Batch)
+            {
+                var chunk = live.Skip(i).Take(Batch).ToList();
+                var refs = (await db.RawMessages.AsNoTracking().Where(r => chunk.Contains(r.StoragePath)).Select(r => r.StoragePath).ToListAsync(ct)).ToHashSet();
+                foreach (var rel in chunk) { if (refs.Contains(rel)) referenced++; else unreferenced.Add(rel); }
+            }
+            var deleted = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < unreferenced.Count; i += Batch)
+            {
+                var shas = unreferenced.Skip(i).Take(Batch).Select(ShaOf).ToList();
+                var hit = await db.AuditChain.AsNoTracking().Where(c => c.Kind == "email.deleted" && c.Sha256 != null && shas.Contains(c.Sha256)).Select(c => c.Sha256!).Distinct().ToListAsync(ct);
+                foreach (var h in hit) deleted.Add(h);
+            }
+            var eligible = unreferenced.Where(r => deleted.Contains(ShaOf(r))).ToList();
+            var unclaimed = unreferenced.Where(r => !deleted.Contains(ShaOf(r))).ToList();
+            return (eligible, unclaimed, referenced);
+        }
+
+        private async Task BinPhaseAsync(Ctx x, bool overrideBreaker, CancellationToken ct)
+        {
+            var live = ListLive(x.BaseFull, ct);
+            x.C.Scanned = live.Count;
+            if (live.Count == 0) return;
+
+            // Second review N-01(d): an empty database next to a full folder is never a deletion.
+            if (!await x.Db.RawMessages.AsNoTracking().AnyAsync(ct))
+            {
+                x.C.Alarm = $"The database holds no stored originals but the originals folder holds {live.Count}. This looks like an empty or wrong database, so nothing was moved.";
+                _logger.LogError("Original Trash refused: {Alarm}", x.C.Alarm);
+                return;
+            }
+
+            var (eligible, unclaimed, referenced) = await ClassifyAsync(x.Db, live, ct);
+            x.C.Referenced = referenced; x.C.Unclaimed = unclaimed.Count;
+
+            // Circuit breaker: moving more than a small share of all originals at once is not what a deletion looks like.
+            var limit = Math.Max(Opt.BreakerMinFiles, (int)Math.Ceiling(live.Count * Opt.BreakerPercent / 100.0));
+            if (!overrideBreaker && eligible.Count > limit)
+            {
+                x.C.Alarm = $"{eligible.Count} of {live.Count} originals have a recorded delete request and no email, which is more than the safety limit of {limit} ({Opt.BreakerPercent}% of the originals, at least {Opt.BreakerMinFiles}). Nothing was moved. If these deletions are expected (for example a removed account), run the Trash again with \"Run anyway\".";
+                _logger.LogError("Original Trash refused: {Alarm}", x.C.Alarm);
+                return;
+            }
+
+            foreach (var rel in eligible)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (x.C.Binned >= Opt.MaxFilesPerRun) { x.C.Deferred++; continue; }
+                await BinOneAsync(x, rel, "its email was deleted (a delete request is recorded) and no email refers to it", ct);
+            }
+        }
+
+        private async Task BinOneAsync(Ctx x, string rel, string reason, CancellationToken ct)
+        {
+            var entryAdded = false; string? live = null, bin = null;
             try
             {
                 if (!TryParseLive(rel, out var sha)) return;
-                var live = Abs(x, rel);
+                live = Abs(x, rel);
                 if (!IsSafe(live, x.BaseFull)) { x.C.Errors++; _logger.LogError("Refusing to bin {Path}: unsafe path", rel); return; }
                 if (!File.Exists(live)) return;
                 if (File.GetLastWriteTimeUtc(live) > DateTime.UtcNow - RecentWrite) { x.C.Deferred++; return; }
@@ -361,7 +491,7 @@ namespace MailArchiver.Services.Shared
                 // Re-check right before the move, never trust the batch.
                 if (await IsReferencedAsync(x.Db, rel, ct)) { x.C.Referenced++; return; }
 
-                var binRel = BinRel(sha); var bin = Abs(x, binRel);
+                var binRel = BinRel(sha); bin = Abs(x, binRel);
                 if (!IsSafe(bin, x.BaseFull)) { x.C.Errors++; _logger.LogError("Refusing to bin {Sha}: unsafe bin path", sha); return; }
                 var size = new FileInfo(live).Length;
 
@@ -370,43 +500,58 @@ namespace MailArchiver.Services.Shared
                     // Identical bytes are already in the bin (the same email came and went again): keep that copy, drop this one.
                     if (HashFile(bin) != sha) { x.C.Errors++; _logger.LogError("Bin copy of {Sha} does not match its name; live file left alone", sha); return; }
                     if (!await RecordAsync(x, "original.binned", sha, new { storagePath = rel, binPath = binRel, reason = "an identical copy is already in the bin", retentionDays = Opt.BinRetentionDays }, ct)) { x.C.Errors++; return; }
-                    File.Delete(live);
                     await UpsertEntryAsync(x, rel, sha, binRel, size, ct);
+                    File.Delete(live);
                     x.C.Binned++;
                     return;
                 }
 
                 if (HashFile(live) != sha) { x.C.Errors++; _logger.LogError("Original {Sha} does not match its own name; not binned", sha); return; }
 
+                // N-03: the record and the entry come BEFORE the move, so a crash can never leave an unlisted file in the Trash. If the
+                // process dies after them, the next run's reconcile pass sees an entry whose file never arrived and clears it.
+                if (!await RecordAsync(x, "original.binned", sha, new { storagePath = rel, binPath = binRel, reason, retentionDays = Opt.BinRetentionDays }, ct)) { x.C.Errors++; return; }
+                await UpsertEntryAsync(x, rel, sha, binRel, size, ct); entryAdded = true;
+
+                // N-06: look again at the very last moment (an import that reused this file touches it and then commits its row).
+                if (File.GetLastWriteTimeUtc(live) > DateTime.UtcNow - RecentWrite || await IsReferencedAsync(x.Db, rel, ct))
+                { await AbandonMoveAsync(x, rel, sha, binRel, "an email started using it again", ct); entryAdded = false; x.C.Referenced++; return; }
+
                 Directory.CreateDirectory(Path.GetDirectoryName(bin)!);
                 File.Move(live, bin, overwrite: false);
 
-                bool ok = !File.Exists(live) && File.Exists(bin) && new FileInfo(bin).Length == size && HashFile(bin) == sha;
-                if (ok && await IsReferencedAsync(x.Db, rel, ct))
+                var ok = !File.Exists(live) && File.Exists(bin) && new FileInfo(bin).Length == size && HashFile(bin) == sha;
+                if (ok && (await IsReferencedAsync(x.Db, rel, ct)))
                 {
                     // A row appeared while we moved it: undo, it is live again.
-                    ok = false; x.C.Referenced++;
                     UndoMove(bin, live);
+                    await AbandonMoveAsync(x, rel, sha, binRel, "an email started using it while it was being moved", ct); entryAdded = false; x.C.Referenced++;
                     return;
                 }
-                if (!ok) { x.C.Errors++; UndoMove(bin, live); _logger.LogError("Moving {Sha} to the bin did not verify; undone", sha); return; }
-
-                if (!await RecordAsync(x, "original.binned", sha, new { storagePath = rel, binPath = binRel, reason = "no email refers to it", retentionDays = Opt.BinRetentionDays }, ct))
-                {
-                    UndoMove(bin, live); x.C.Errors++; return;
-                }
-                await UpsertEntryAsync(x, rel, sha, binRel, size, ct);
+                if (!ok) { UndoMove(bin, live); await AbandonMoveAsync(x, rel, sha, binRel, "the move did not verify", ct); entryAdded = false; x.C.Errors++; _logger.LogError("Moving {Sha} to the bin did not verify; undone", sha); return; }
                 x.C.Binned++;
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
                 x.C.Errors++; _logger.LogError(ex, "Could not bin {Path}", rel);
+                if (entryAdded && live != null && bin != null)
+                {
+                    UndoMove(bin, live);
+                    try { if (TryParseLive(rel, out var s2)) await AbandonMoveAsync(x, rel, s2, BinRel(s2), "the move failed", ct); } catch { /* the next run's reconcile pass clears it */ }
+                }
             }
+        }
+
+        /// <summary>Takes back a started move: the entry goes, and the chain says the original is live again (so 'binned' is not left standing).</summary>
+        private async Task AbandonMoveAsync(Ctx x, string rel, string sha, string binRel, string why, CancellationToken ct)
+        {
+            await x.Db.OriginalBinEntries.Where(b => b.StoragePath == rel).ExecuteDeleteAsync(ct);
+            await RecordAsync(x, "original.restored", sha, new { storagePath = rel, binPath = binRel, reason = "the move to the Trash was undone: " + why, liveCopyExisted = true }, ct);
         }
 
         private static void UndoMove(string from, string to)
         {
-            try { if (File.Exists(from) && !File.Exists(to)) File.Move(from, to, overwrite: false); } catch { /* best effort; the entry-less bin file is still on disk and recorded by the next run's error */ }
+            try { if (File.Exists(from) && !File.Exists(to)) File.Move(from, to, overwrite: false); } catch { /* best effort; the next run's reconcile pass adopts a file left in the Trash */ }
         }
 
         private static async Task UpsertEntryAsync(Ctx x, string rel, string sha, string binRel, long size, CancellationToken ct)
@@ -415,6 +560,46 @@ namespace MailArchiver.Services.Shared
             if (existing == null)
                 x.Db.OriginalBinEntries.Add(new OriginalBinEntry { StoragePath = rel, Sha256 = sha, BinPath = binRel, BinnedAt = AuditChainHash.TruncateToMicroseconds(DateTime.UtcNow), Size = size });
             await x.Db.SaveChangesAsync(ct);
+        }
+
+        // ----- housekeeping ----------------------------------------------------------------------------------
+
+        private static readonly Regex TempName = new(@"^[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{64}\.eml\.gz\.[0-9a-f]{32}\.tmp$", RegexOptions.Compiled);
+
+        /// <summary>Second review N-15: half-written files of a crashed hash-named write, older than a day, are deleted (they hold full message content).</summary>
+        private void CleanTempFiles(Ctx x)
+        {
+            var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System };
+            foreach (var file in Directory.EnumerateFiles(x.BaseFull, "*.tmp", options))
+            {
+                var rel = Path.GetRelativePath(x.BaseFull, file).Replace('\\', '/');
+                if (!TempName.IsMatch(rel) || !IsSafe(file, x.BaseFull)) continue;
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(file) > DateTime.UtcNow - RecentWrite) continue;
+                    File.Delete(file); x.C.TempCleaned++;
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { x.C.Errors++; _logger.LogWarning(ex, "Could not delete the leftover {Path}", rel); }
+            }
+            if (x.C.TempCleaned > 0) _logger.LogInformation("Original Trash: removed {Count} leftover temporary files of interrupted writes", x.C.TempCleaned);
+        }
+
+        /// <summary>
+        /// Second review N-07: text extracted from an attachment (and its OCR text) is keyed by the attachment's hash. When no
+        /// attachment refers to a hash any more, its text is deleted (after a day, so one being ingested is never caught).
+        /// </summary>
+        private async Task CleanAttachmentTextsAsync(Ctx x, CancellationToken ct)
+        {
+            try
+            {
+                x.C.TextsCleaned = await x.Db.Database.ExecuteSqlRawAsync(@"
+                    DELETE FROM mail_archiver.""AttachmentTexts"" t
+                    WHERE t.""ExtractedAt"" < (now() at time zone 'utc') - interval '1 day'
+                      AND NOT EXISTS (SELECT 1 FROM mail_archiver.""EmailAttachments"" a WHERE a.""Sha256"" = t.""Sha256"")
+                      AND NOT EXISTS (SELECT 1 FROM mail_archiver.""AttachmentContents"" c WHERE c.""Hash"" = t.""Sha256"")", ct);
+                if (x.C.TextsCleaned > 0) _logger.LogInformation("Original Trash: removed the extracted text of {Count} attachments no email has any more", x.C.TextsCleaned);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _logger.LogWarning(ex, "Could not clean up attachment texts"); }
         }
 
         // ----- phase 3: purge what has been in the bin long enough -------------------------------------------
@@ -473,7 +658,19 @@ namespace MailArchiver.Services.Shared
             return new OriginalBinStatus(Opt.Enabled, applicable, applicable ? null : why, Opt.BinRetentionDays, Opt.IntervalHours, Opt.MaxFilesPerRun,
                 inBin, bytes, earliest,
                 await db.OriginalCleanupRuns.SumAsync(r => (long)r.Binned), await db.OriginalCleanupRuns.SumAsync(r => (long)r.Restored),
-                await db.OriginalCleanupRuns.SumAsync(r => (long)r.Purged), last);
+                await db.OriginalCleanupRuns.SumAsync(r => (long)r.Purged), last,
+                applicable ? await IdentityOrNullAsync(scope.ServiceProvider) : null);
+        }
+
+        private static async Task<ArchiveIdentityCheck?> IdentityOrNullAsync(IServiceProvider sp)
+        {
+            try
+            {
+                var baseFull = Path.GetFullPath(sp.GetRequiredService<RawMessagePathResolver>().BasePath);
+                if (!Directory.Exists(baseFull)) return null;
+                return await sp.GetRequiredService<IArchiveIdentityService>().CheckAsync(baseFull);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return null; }
         }
 
         public async Task<IReadOnlyList<OriginalBinItem>> ListBinAsync(int limit)
@@ -490,8 +687,10 @@ namespace MailArchiver.Services.Shared
             if (!Sha.IsMatch(sha256 ?? string.Empty)) return new OriginalRestoreResult(false, "Expected a lowercase hex SHA-256 (64 characters).");
             if (!OriginalCleanupOptions.IsApplicable(_raw.CurrentValue, out var why)) return new OriginalRestoreResult(false, "The Trash does not apply to this archive: " + why);
 
-            lock (_gate) { if (_current is { IsCompleted: false }) return new OriginalRestoreResult(false, "A Trash run is in progress; try again when it has finished."); }
-
+            // N-08: one operation at a time; a restore never overlaps a run.
+            if (!await _opGate.WaitAsync(TimeSpan.FromSeconds(2))) return new OriginalRestoreResult(false, "A Trash run is in progress; try again when it has finished.");
+            try
+            {
             using var scope = _scopes.CreateScope();
             var sp = scope.ServiceProvider;
             var db = sp.GetRequiredService<MailArchiverDbContext>();
@@ -510,6 +709,88 @@ namespace MailArchiver.Services.Shared
             return ok
                 ? new OriginalRestoreResult(true, "Restored. It stays live for at least a day so it can be re-imported; if no email refers to it after that, it goes back to the Trash with a fresh retention period.")
                 : new OriginalRestoreResult(false, "It could not be restored (see the server log).");
+            }
+            finally { _opGate.Release(); }
+        }
+
+        public async Task<ArchiveIdentityCheck> GetIdentityAsync()
+        {
+            using var scope = _scopes.CreateScope();
+            var sp = scope.ServiceProvider;
+            var baseFull = Path.GetFullPath(sp.GetRequiredService<RawMessagePathResolver>().BasePath);
+            if (!Directory.Exists(baseFull)) return new ArchiveIdentityCheck(true, ArchiveIdentityCheck.Matches, "The originals folder does not exist yet.", null, null);
+            return await sp.GetRequiredService<IArchiveIdentityService>().CheckAsync(baseFull);
+        }
+
+        public async Task<ArchiveIdentityCheck> AdoptAsync(string? actor)
+        {
+            await _opGate.WaitAsync();
+            try
+            {
+                using var scope = _scopes.CreateScope();
+                var sp = scope.ServiceProvider;
+                var baseFull = Path.GetFullPath(sp.GetRequiredService<RawMessagePathResolver>().BasePath);
+                Directory.CreateDirectory(baseFull);
+                var before = await sp.GetRequiredService<IArchiveIdentityService>().CheckAsync(baseFull);
+                var after = await sp.GetRequiredService<IArchiveIdentityService>().AdoptAsync(baseFull);
+                var chain = sp.GetService<IAuditChain>();
+                if (chain != null && _integrity.CurrentValue.AuditChainEnabled)
+                    await chain.AppendAsync("archive.identity.adopted", null, null, new { actor = actor ?? "an administrator", before = before.Code, after = after.Code, archiveId = after.DatabaseId });
+                var access = sp.GetService<IAccessLogService>();
+                if (access != null) await access.LogAccessAsync(actor ?? "unknown", AccessLogType.Integrity, searchParameters: $"originals folder adopted as belonging to this database (was: {before.Code})");
+                return after;
+            }
+            finally { _opGate.Release(); }
+        }
+
+        public async Task<IReadOnlyList<UnclaimedOriginal>> ListUnclaimedAsync(int limit)
+        {
+            using var scope = _scopes.CreateScope();
+            var sp = scope.ServiceProvider;
+            var db = sp.GetRequiredService<MailArchiverDbContext>();
+            var paths = sp.GetRequiredService<RawMessagePathResolver>();
+            var baseFull = Path.GetFullPath(paths.BasePath);
+            if (!Directory.Exists(baseFull)) return Array.Empty<UnclaimedOriginal>();
+            var live = ListLive(baseFull, CancellationToken.None);
+            var (_, unclaimed, _) = await ClassifyAsync(db, live, CancellationToken.None);
+            var items = new List<UnclaimedOriginal>();
+            foreach (var rel in unclaimed.Take(Math.Clamp(limit, 1, 1000)))
+            {
+                var fi = new FileInfo(paths.GetAbsolutePath(rel));
+                if (fi.Exists) items.Add(new UnclaimedOriginal(ShaOf(rel), fi.Length, fi.LastWriteTimeUtc));
+            }
+            return items;
+        }
+
+        public async Task<OriginalRestoreResult> MoveToTrashAsync(string sha256, string? actor)
+        {
+            if (!Sha.IsMatch(sha256 ?? string.Empty)) return new OriginalRestoreResult(false, "Expected a lowercase hex SHA-256 (64 characters).");
+            if (!OriginalCleanupOptions.IsApplicable(_raw.CurrentValue, out var why)) return new OriginalRestoreResult(false, "The Trash does not apply to this archive: " + why);
+            if (!await _opGate.WaitAsync(TimeSpan.FromSeconds(2))) return new OriginalRestoreResult(false, "A Trash run is in progress; try again when it has finished.");
+            try
+            {
+                using var scope = _scopes.CreateScope();
+                var sp = scope.ServiceProvider;
+                var db = sp.GetRequiredService<MailArchiverDbContext>();
+                var paths = sp.GetRequiredService<RawMessagePathResolver>();
+                var baseFull = Path.GetFullPath(paths.BasePath);
+                var identity = await sp.GetRequiredService<IArchiveIdentityService>().CheckAsync(baseFull);
+                if (!identity.Ok) return new OriginalRestoreResult(false, identity.Message);
+                var rel = LiveRel(sha256);
+                if (!File.Exists(paths.GetAbsolutePath(rel))) return new OriginalRestoreResult(false, "That original is not in the originals folder.");
+                if (await IsReferencedAsync(db, rel, CancellationToken.None)) return new OriginalRestoreResult(false, "An email still refers to that original, so it stays.");
+                var c = new Counters();
+                var x = new Ctx(db, paths, baseFull, sp.GetService<IAuditChain>(), c);
+                await BinOneAsync(x, rel, $"moved to the Trash by {actor ?? "an administrator"}: no delete request was recorded for it", CancellationToken.None);
+                if (c.Binned == 1)
+                {
+                    var access = sp.GetService<IAccessLogService>();
+                    if (access != null) await access.LogAccessAsync(actor ?? "unknown", AccessLogType.Integrity, searchParameters: $"original moved to the Trash by an administrator: {sha256[..12]}");
+                    return new OriginalRestoreResult(true, "Moved to the Trash. It can be restored for the retention period.");
+                }
+                return new OriginalRestoreResult(false, c.Deferred > 0 ? "It was written or used in the last 24 hours, so it was left alone. Try again later." : "It could not be moved (see the server log).");
+            }
+            finally { _opGate.Release(); }
         }
 
         public async Task<ErasureStatus> DescribeEmailAsync(int emailId)

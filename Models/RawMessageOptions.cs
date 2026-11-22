@@ -14,8 +14,9 @@ namespace MailArchiver.Models
 
         /// <summary>
         /// Fork: when true, an email whose original cannot be kept (no capture from the provider,
-        /// over the size limit, or lean ingest could not verify it) is NOT archived: it is logged,
-        /// counted in the metrics and reported as failed, so the next sync tries it again. Default
+        /// over the size limit) is NOT archived: it is logged,
+        /// counted in the metrics and reported as failed, so the next sync tries it again. Lean ingest that cannot
+        /// verify an email falls back to full storage WITH the verified original (it is not refused). Default
         /// false keeps the upstream behaviour (archive without the original and log an error).
         /// Requires <see cref="Enabled"/>.
         /// </summary>
@@ -81,8 +82,9 @@ namespace MailArchiver.Models
         /// Name each original by its SHA-256 (<c>ab/cd/&lt;sha256&gt;.eml.gz</c>) instead of by the
         /// email id. The hash is then the stable identifier of the original, the file can be
         /// written and verified before the email row exists, and byte-identical originals share
-        /// one file. Files named this way are written once and never deleted automatically (the
-        /// delete path and the orphan cleanup only act on id-named files). Off by default, so
+        /// one file. Files named this way are written once. The delete path and the old orphan cleanup only act on
+        /// id-named files; hash-named files are collected only by the original Trash (<see cref="OriginalCleanup"/>), and only when
+        /// their email was deleted on purpose and nothing refers to them any more. Off by default, so
         /// upstream behaviour is unchanged; existing id-named rows stay readable either way
         /// because the row records its own path.
         /// </summary>

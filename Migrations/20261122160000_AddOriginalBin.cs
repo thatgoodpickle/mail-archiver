@@ -6,7 +6,7 @@ namespace MailArchiver.Migrations
 {
     /// <summary>
     /// Recycle bin for hash-named originals (review F-11): the bin entries and the collector runs.
-    /// Purely additive; nothing happens until RawMessages:OriginalCleanup:Enabled is set.
+    /// Purely additive. The Trash is on by default but only acts on hash-named originals with a recorded delete request (see the later migration AddArchiveIdentityAndTrashSafety).
     /// </summary>
     public partial class AddOriginalBin : Migration
     {

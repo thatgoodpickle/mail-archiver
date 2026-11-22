@@ -7,10 +7,14 @@ namespace MailArchiver.Models
     /// When the collector finds one that NO RawMessages row refers to, it MOVES it into a bin folder
     /// (<c>.bin/</c> under the originals folder, same layout). It stays there for
     /// <see cref="BinRetentionDays"/> days and can be restored; only then is it deleted for good. Binned files
-    /// that a row refers to again are moved back. Off by default.
+    /// that a row refers to again are moved back. ON by default.
     /// </para>
-    /// <para>Honest limit: enabling this means deleted emails are really erased after the retention period, and
-    /// from then on the original can only be recovered from a backup.</para>
+    /// <para>It is a garbage collector, not a sweeper: a file is only collected when (1) the email it belonged to was
+    /// deleted on purpose (an 'email.deleted' entry for its hash is in the audit chain), (2) no row refers to it, (3) the
+    /// database is the one these originals belong to (archive identity), and (4) the run does not look like a mistake (circuit
+    /// breaker). Files without a delete request are only listed, never moved by themselves.</para>
+    /// <para>Honest limit: after the retention period the original file is deleted for good and can only be recovered from a
+    /// backup. Extracted attachment text, subjects and senders in the access log, and backups are not touched by this.</para>
     /// </summary>
     public class OriginalCleanupOptions
     {
@@ -36,6 +40,12 @@ namespace MailArchiver.Models
         /// <summary>Delay before the first scheduled run, in minutes, so startup settles first.</summary>
         public int StartupDelayMinutes { get; set; } = 15;
 
+        /// <summary>Circuit breaker: a run refuses to move anything when more than this percentage of the live originals would be moved at once. Minimum 1.</summary>
+        public int BreakerPercent { get; set; } = 5;
+
+        /// <summary>The breaker only applies above this many files, so small archives still work. Minimum 1.</summary>
+        public int BreakerMinFiles { get; set; } = 50;
+
         /// <summary>
         /// Whether the collector can act at all: originals on the filesystem, hash-named. Not a startup error when it
         /// is false (the setting is on by default), the collector then stays idle and says why.
@@ -58,6 +68,8 @@ namespace MailArchiver.Models
             if (o.BinRetentionDays < 1) p.Add("RawMessages:OriginalCleanup:BinRetentionDays must be at least 1.");
             if (o.IntervalHours < 1) p.Add("RawMessages:OriginalCleanup:IntervalHours must be at least 1.");
             if (o.MaxFilesPerRun < 1) p.Add("RawMessages:OriginalCleanup:MaxFilesPerRun must be at least 1.");
+            if (o.BreakerPercent < 1 || o.BreakerPercent > 100) p.Add("RawMessages:OriginalCleanup:BreakerPercent must be between 1 and 100.");
+            if (o.BreakerMinFiles < 1) p.Add("RawMessages:OriginalCleanup:BreakerMinFiles must be at least 1.");
             return p;
         }
     }
@@ -80,6 +92,8 @@ namespace MailArchiver.Models
         public const string Running = "Running";
         public const string Completed = "Completed";
         public const string Failed = "Failed";
+        /// <summary>The run did not move or delete anything because a safety check refused it (see <see cref="Alarm"/>).</summary>
+        public const string Refused = "Refused";
 
         public int Id { get; set; }
         public DateTime StartedAt { get; set; } = DateTime.UtcNow;
@@ -93,7 +107,25 @@ namespace MailArchiver.Models
         public int Purged { get; set; }
         public int Deferred { get; set; }
         public int Errors { get; set; }
+
+        /// <summary>Live originals that no row refers to and that have NO delete request: listed, never moved by a run.</summary>
+        public int Unclaimed { get; set; }
+
+        /// <summary>Why the run was refused (identity mismatch, breaker, empty database); null otherwise.</summary>
+        public string? Alarm { get; set; }
         public string? StartedBy { get; set; }
         public string? Error { get; set; }
+    }
+
+    /// <summary>
+    /// The identity of this archive (fork): one random id kept in the database and, as a small marker file, in the originals
+    /// folder. The Trash only runs when both agree, so a wrong, empty or older database can never make the originals of a
+    /// different archive look deleted.
+    /// </summary>
+    public class ArchiveIdentity
+    {
+        public int Id { get; set; } = 1;
+        public string ArchiveId { get; set; } = string.Empty;
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 }

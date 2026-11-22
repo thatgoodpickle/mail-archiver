@@ -21,6 +21,7 @@ namespace MailArchiver.Data
         public DbSet<IntegrityFinding> IntegrityFindings { get; set; }
         public DbSet<AuditChainEntry> AuditChain { get; set; }
         public DbSet<OriginalBinEntry> OriginalBinEntries { get; set; }
+        public DbSet<ArchiveIdentity> ArchiveIdentities { get; set; }
         public DbSet<AppSetting> AppSettings { get; set; }
         public DbSet<OriginalCleanupRun> OriginalCleanupRuns { get; set; }
         public DbSet<AttachmentText> AttachmentTexts { get; set; }
@@ -251,6 +252,7 @@ namespace MailArchiver.Data
                 e.HasIndex(x => x.Sha256);
             });
             modelBuilder.Entity<OriginalCleanupRun>(e => e.ToTable("OriginalCleanupRuns", "mail_archiver"));
+            modelBuilder.Entity<ArchiveIdentity>(e => { e.ToTable("ArchiveIdentity", "mail_archiver"); e.HasKey(x => x.Id); e.Property(x => x.Id).ValueGeneratedNever(); e.Property(x => x.CreatedAt).HasColumnType("timestamp without time zone"); });
 
             // Fork: tamper-evident audit trail. The sequence number is assigned by the writer (under a
             // lock), never by the database, because it is part of the hash.
@@ -261,6 +263,8 @@ namespace MailArchiver.Data
                 e.Property(x => x.Seq).ValueGeneratedNever();
                 e.Property(x => x.Timestamp).HasColumnType("timestamp without time zone");
                 e.HasIndex(x => x.EmailId);
+                // Fork: 'is there a delete request for this original?' looks entries up by hash.
+                e.HasIndex(x => x.Sha256).HasFilter("\"Sha256\" IS NOT NULL");
             });
 
             // Original message storage (opt-in, RawMessages:Enabled). One row per email,

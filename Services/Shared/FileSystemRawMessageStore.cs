@@ -72,7 +72,7 @@ namespace MailArchiver.Services.Shared
                 }
 
                 // Fork (F-11): reused, so mark it as in use now; the original bin leaves recently written files alone.
-                try { File.SetLastWriteTimeUtc(absolute, DateTime.UtcNow); } catch (IOException) { }
+                try { File.SetLastWriteTimeUtc(absolute, DateTime.UtcNow); } catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { /* N-12: not our file (another user): the 24 h protection does not apply to it */ }
                 return;
             }
 
@@ -98,7 +98,7 @@ namespace MailArchiver.Services.Shared
                         var existing = RawMessageCodec.Decompress(await File.ReadAllBytesAsync(absolute), row.Size);
                         if (!string.Equals(RawMessageCodec.ComputeSha256(existing), row.Sha256, StringComparison.Ordinal))
                             throw new IOException("An existing original does not match its own name; refusing to use it.");
-                        try { File.SetLastWriteTimeUtc(absolute, DateTime.UtcNow); } catch (IOException) { }   // F-11: in use now
+                        try { File.SetLastWriteTimeUtc(absolute, DateTime.UtcNow); } catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { /* N-12: not our file (another user): the 24 h protection does not apply to it */ }   // F-11: in use now
                     }
                 }
                 else
