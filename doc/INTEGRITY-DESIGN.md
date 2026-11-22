@@ -329,7 +329,9 @@ Second review (REVIEW-opus2-2026-11-22.md); REVIEW-fixes-status-2.md has one row
   the Graph sync and the importers keep their previous behaviour (no per-message checkpoint exists there).
 - **Cheaper syncing and variants (N-11).** Before a body is downloaded the sync fetches envelope and size for the batch and skips messages already
   archived (same Message-ID and size, same folder; any folder for Gmail). A message that reuses a Message-ID but is a different original is archived
-  as a second email (the Message-ID is not unique in the archive), not dropped. Gmail copies seen in another folder no longer flip the folder.
+  as a second email (the Message-ID is not unique in the archive), not dropped, **except** when it also has exactly the same size as one
+  already archived: the pre-check compares Message-ID and size without downloading, so such a pair (rare: same ID, same byte count, different
+  bytes) is skipped as already archived. Closing that gap needs the download, so it is a documented limit. Gmail copies seen in another folder no longer flip the folder.
 - **What "Valid" covers now (N-04, N-05, N-09, N-13).** Calendar-typed attachment rows are compared (a synthesized `.ics` is accepted only when it can be
   re-derived from the original, once); an email archived after the chain began without a chain entry is `ChainMismatch` (state `Gap`), not
   Valid (emails from before the chain stay *Unchained*); a changed display time zone shifts every stored date by a whole offset, which is noted
