@@ -57,6 +57,13 @@ namespace MailArchiver.Models.ViewModels
 
         [Display(Name = "Excluded Folders")]
         public string? ExcludedFolders { get; set; } = string.Empty;
+
+        [Display(Name = "Gmail search filter")]
+        [StringLength(500)]
+        public string? GmailSearchFilter { get; set; }
+
+        /// <summary>Set by the form when the Test button showed that the filter skips most of the mailbox and the admin confirmed it.</summary>
+        public bool GmailFilterConfirmed { get; set; }
         
         [Display(Name = "Delete After Days")]
         [Range(1, int.MaxValue, ErrorMessage = "Delete after days must be at least 1")]

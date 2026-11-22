@@ -68,8 +68,12 @@ namespace MailArchiver.Controllers
         IOptions<MailSyncOptions> mailSyncOptions,
         IBatchRestoreService batchRestoreService,
         MailcowProvisioningService mailcowProvisioning,
-        MailArchiver.Utilities.DateTimeHelper dateTimeHelper)
+        MailArchiver.Utilities.DateTimeHelper dateTimeHelper,
+        MailArchiver.Services.Providers.Imap.ImapMailSyncService? imapSync = null,
+        MailArchiver.Services.Shared.IAuditChain? auditChain = null)
     {
+        _imapSync = imapSync;
+        _auditChain = auditChain;
         _context = context;
         _emailCoreService = emailCoreService;
         _providerFactory = providerFactory;
@@ -100,6 +104,38 @@ namespace MailArchiver.Controllers
         private readonly OffloadOptions _offloadOptions;
         private readonly IBatchRestoreService _batchRestoreService;
         private readonly MailArchiver.Utilities.DateTimeHelper _dateTimeHelper;
+    private readonly MailArchiver.Services.Providers.Imap.ImapMailSyncService? _imapSync;
+    private readonly MailArchiver.Services.Shared.IAuditChain? _auditChain;
+
+    /// <summary>The Gmail search filter as stored: only Gmail IMAP accounts have one; blank means "no filter", null the default.</summary>
+    private static string? FilterToStore(ProviderType provider, string? server, string? posted)
+    {
+        if (provider != ProviderType.IMAP || !MailArchiver.Services.Shared.GmailAccount.Is(new MailAccount { ImapServer = server })) return null;
+        return posted == null ? null : posted.Trim();
+    }
+
+    /// <summary>Records a change of the Gmail search filter in the audit chain (what the archive claims to contain depends on it).</summary>
+    private async Task RecordFilterChangeAsync(MailAccount account, string? oldFilter, string? newFilter, bool confirmedLargeSkip)
+    {
+        if (_auditChain == null) return;
+        var was = MailArchiver.Services.Shared.GmailAccount.EffectiveFilter(new MailAccount { ImapServer = account.ImapServer, GmailSearchFilter = oldFilter });
+        var now = MailArchiver.Services.Shared.GmailAccount.EffectiveFilter(account);
+        if (string.Equals(was, now, StringComparison.Ordinal)) return;
+        var authService = HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>();
+        await _auditChain.AppendAsync("account.filter.changed", null, null,
+            new { accountId = account.Id, account = account.Name, old = was, @new = now, actor = authService?.GetCurrentUserDisplayName(HttpContext), confirmedLargeSkip });
+    }
+
+    /// <summary>Tries a Gmail search filter against the account's mailbox: counts only.</summary>
+    [HttpPost, ValidateAntiForgeryToken]
+    public async Task<IActionResult> TestGmailFilter(int id, string? filter)
+    {
+        var account = await _context.MailAccounts.FindAsync(id);
+        if (account == null) return NotFound();
+        if (_imapSync == null) return Json(new { ok = false, message = "Not available." });
+        var r = await _imapSync.TestGmailFilterAsync(account, filter ?? string.Empty);
+        return Json(new { ok = r.Ok, message = r.Message, total = r.Total, matching = r.Matching, skipped = r.Skipped });
+    }
 
         private async Task PopulateMailcowViewDataAsync()
         {
@@ -441,6 +477,7 @@ namespace MailArchiver.Controllers
                                    : null,
                     TenantId = model.Provider == ProviderType.M365 ? model.TenantId : null,
                     ExcludedFolders = string.Empty,
+                    GmailSearchFilter = FilterToStore(model.Provider, model.ImapServer, model.GmailSearchFilter),
                     DeleteAfterDays = model.DeleteAfterDays,
                     LocalRetentionDays = model.LocalRetentionDays,
                     SyncIntervalMinutes = model.SyncIntervalMinutes,
@@ -519,6 +556,7 @@ namespace MailArchiver.Controllers
                     _logger.LogInformation("Saving account to database");
                     _context.MailAccounts.Add(account);
                     await _context.SaveChangesAsync();
+                    await RecordFilterChangeAsync(account, null, account.GmailSearchFilter, false);   // the claim for this account starts here
 
                     // Auto-assign the account to the current user if they are a SelfManager (not Admin)
                     var authService = HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>();
@@ -806,6 +844,7 @@ namespace MailArchiver.Controllers
                 IsEnabled = account.IsEnabled,
                 LastSync = account.LastSync,
                 ExcludedFolders = account.ExcludedFolders,
+                GmailSearchFilter = MailArchiver.Services.Shared.GmailAccount.Is(account) ? (account.GmailSearchFilter ?? MailArchiver.Services.Shared.GmailAccount.DefaultFilter) : null,
                 DeleteAfterDays = account.DeleteAfterDays,
                 LocalRetentionDays = account.LocalRetentionDays,
                 SyncIntervalMinutes = account.SyncIntervalMinutes,
@@ -1142,6 +1181,8 @@ namespace MailArchiver.Controllers
 
                     account.UseSSL = model.Provider == ProviderType.MSA ? true : model.UseSSL;
                     account.ExcludedFolders = model.ExcludedFolders ?? string.Empty;
+                    var oldGmailFilter = account.GmailSearchFilter;
+                    account.GmailSearchFilter = FilterToStore(account.Provider, account.ImapServer, model.GmailSearchFilter);
                     account.DeleteAfterDays = model.DeleteAfterDays;
                     account.LocalRetentionDays = model.LocalRetentionDays;
                     account.SyncIntervalMinutes = model.SyncIntervalMinutes;
@@ -1177,7 +1218,8 @@ namespace MailArchiver.Controllers
                     }
 
                     await _context.SaveChangesAsync();
-                    
+                    await RecordFilterChangeAsync(account, oldGmailFilter, account.GmailSearchFilter, model.GmailFilterConfirmed);
+
                     // Log the account update action
                     var authService = HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>();
                     var currentUsername = authService.GetCurrentUserDisplayName(HttpContext);

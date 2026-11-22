@@ -14,6 +14,8 @@ namespace MailArchiver.Models.ViewModels
         public AttachmentTextStatus? TextStatus { get; set; }
         public IReadOnlyList<SyncProblemMessage> SyncProblems { get; set; } = Array.Empty<SyncProblemMessage>();
         public int QuarantinedCount { get; set; }
+        /// <summary>What each Gmail account is claimed to contain: (account name, the filter applied, or null for everything).</summary>
+        public IReadOnlyList<(string Account, string? Filter)> GmailScopes { get; set; } = Array.Empty<(string, string?)>();
         public Dictionary<int, string> AccountNames { get; set; } = new();
         public IReadOnlyList<SettingView> Settings { get; set; } = Array.Empty<SettingView>();
         public Dictionary<string, string> Errors { get; } = new();

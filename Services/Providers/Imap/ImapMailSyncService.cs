@@ -697,6 +697,45 @@ namespace MailArchiver.Services.Providers.Imap
             }
         }
 
+        /// <summary>Result of trying a Gmail search filter against a mailbox: how many messages exist and how many the filter lets through.</summary>
+        public sealed record GmailFilterTestResult(bool Ok, string Message, int Total, int Matching)
+        {
+            public int Skipped => Math.Max(0, Total - Matching);
+        }
+
+        /// <summary>
+        /// Connects with the account's stored credentials and counts, in the folder that holds all mail, the messages in total and the ones the
+        /// filter lets through. Reads nothing but counts; changes nothing on the server.
+        /// </summary>
+        public async Task<GmailFilterTestResult> TestGmailFilterAsync(MailAccount account, string filter)
+        {
+            if (!MailArchiver.Services.Shared.GmailAccount.Is(account))
+                return new GmailFilterTestResult(false, "This account is not a Gmail account, so the filter would be ignored.", 0, 0);
+            if (string.IsNullOrWhiteSpace(filter))
+                return new GmailFilterTestResult(true, "No filter: every message is archived.", 0, 0);
+            using var client = _connectionFactory.CreateImapClient(account.Name);
+            client.Timeout = 60000;
+            client.ServerCertificateValidationCallback = _connectionFactory.ServerCertificateValidationCallback;
+            try
+            {
+                await _connectionFactory.ConnectWithFallbackAsync(client, account.ImapServer, account.ImapPort ?? 993, account.UseSSL, account.Name);
+                await _connectionFactory.AuthenticateClientAsync(client, account);
+                if (!client.Capabilities.HasFlag(ImapCapabilities.GMailExt1))
+                    return new GmailFilterTestResult(false, "The server does not offer Gmail's search extension, so the filter would not be applied.", 0, 0);
+                var all = client.GetFolder(SpecialFolder.All);
+                if (all == null) return new GmailFilterTestResult(false, "The folder with all mail was not found.", 0, 0);
+                await all.OpenAsync(FolderAccess.ReadOnly);
+                var total = (await all.SearchAsync(SearchQuery.All)).Count;
+                var matching = (await all.SearchAsync(SearchQuery.GMailRawSearch(filter.Trim()))).Count;
+                await client.DisconnectAsync(true);
+                return new GmailFilterTestResult(true, "Tried against the folder with all mail.", total, matching);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return new GmailFilterTestResult(false, "The test could not be done: " + (ex.Message.Length > 200 ? ex.Message[..200] : ex.Message), 0, 0);
+            }
+        }
+
         /// <summary>
         /// Second review N-11: before any body is downloaded, fetches envelope and size for the batch and returns the UIDs of
         /// messages we already hold: same Message-ID, same size as the stored original, and (outside Gmail) the same folder.
@@ -809,7 +848,19 @@ namespace MailArchiver.Services.Providers.Imap
                     lastSync = lastSync.AddHours(-12);
                 }
 
-                var query = SearchQuery.DeliveredAfter(lastSync);
+                // Fork: the account's Gmail search filter (for example -label:Marketing) is added to every folder search below, so the
+                // excluded mail is never listed, downloaded or hashed. Only Gmail's raw-search extension understands it.
+                var gmailFilter = MailArchiver.Services.Shared.GmailAccount.EffectiveFilter(account);
+                if (gmailFilter != null && !client.Capabilities.HasFlag(ImapCapabilities.GMailExt1))
+                {
+                    _logger.LogWarning("Account {AccountName} has the Gmail search filter '{Filter}', but the server does not offer Gmail's search extension; the filter is NOT applied", account.Name, gmailFilter);
+                    gmailFilter = null;
+                }
+                SearchQuery WithFilter(SearchQuery q) => gmailFilter == null ? q : q.And(SearchQuery.GMailRawSearch(gmailFilter));
+                if (gmailFilter != null)
+                    _logger.LogInformation("Gmail search filter for account {AccountName}: {Filter}", account.Name, gmailFilter);
+
+                var query = WithFilter(SearchQuery.DeliveredAfter(lastSync));
 
                 try
                 {
@@ -826,7 +877,7 @@ namespace MailArchiver.Services.Providers.Imap
                         {
                             _logger.LogWarning("DeliveredAfter returned 0 results but folder contains {Count} messages during full sync for {FolderName}. Server may not support DeliveredAfter. Using SearchQuery.All instead.",
                                 folder.Count, folder.FullName);
-                            uids = await folder.SearchAsync(SearchQuery.All);
+                            uids = await folder.SearchAsync(WithFilter(SearchQuery.All));
                             _logger.LogInformation("SearchQuery.All found {Count} messages in folder {FolderName}",
                                 uids.Count, folder.FullName);
                         }
@@ -854,7 +905,7 @@ namespace MailArchiver.Services.Providers.Imap
                         try
                         {
                             await EnsureConnectedAsync(folder, client, account);
-                            uids = await folder.SearchAsync(SearchQuery.SentSince(lastSync.Date));
+                            uids = await folder.SearchAsync(WithFilter(SearchQuery.SentSince(lastSync.Date)));
                             _logger.LogDebug("SentSince search found {Count} messages in folder {FolderName}",
                                 uids.Count, folder.FullName);
 
@@ -878,7 +929,7 @@ namespace MailArchiver.Services.Providers.Imap
                             _logger.LogWarning(fallbackEx, "SentSince also failed for folder {FolderName}, using All query",
                                 folder.FullName);
                             await EnsureConnectedAsync(folder, client, account);
-                            uids = await folder.SearchAsync(SearchQuery.All);
+                            uids = await folder.SearchAsync(WithFilter(SearchQuery.All));
                             _logger.LogInformation("All query found {Count} total messages in folder {FolderName}, will filter by date client-side",
                                 uids.Count, folder.FullName);
 

@@ -5,6 +5,20 @@ namespace MailArchiver.Services.Shared
     /// <summary>Gmail-specific behaviour is keyed on the IMAP server name (imap.gmail.com, imap.googlemail.com).</summary>
     public static class GmailAccount
     {
+        /// <summary>The filter a Gmail account gets when none was ever set: mail tagged Marketing (or any sub-label) is not archived.</summary>
+        public const string DefaultFilter = "-label:Marketing";
+
+        /// <summary>
+        /// The Gmail search the sync adds to its folder searches, or null for no filter. Null setting = the default for Gmail accounts,
+        /// empty = explicitly none; other servers never filter.
+        /// </summary>
+        public static string? EffectiveFilter(MailAccount account)
+        {
+            if (!Is(account)) return null;
+            var f = account.GmailSearchFilter == null ? DefaultFilter : account.GmailSearchFilter.Trim();
+            return f.Length == 0 ? null : f;
+        }
+
         public static bool Is(MailAccount account)
         {
             var host = account.ImapServer ?? string.Empty;

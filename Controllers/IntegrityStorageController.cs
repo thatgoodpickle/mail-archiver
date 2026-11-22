@@ -71,6 +71,8 @@ namespace MailArchiver.Controllers
                 var head = await _chain.GetHeadAsync();
                 vm.PublicKeyFingerprint = _manifests.GetPublicKeyFingerprint();
                 vm.AnchorLine = AnchorLine(head, vm.PublicKeyFingerprint);
+                var imap = await _db.MailAccounts.AsNoTracking().Where(a => a.Provider == ProviderType.IMAP).OrderBy(a => a.Name).ToListAsync();
+                vm.GmailScopes = imap.Where(GmailAccount.Is).Select(a => (a.Name, GmailAccount.EffectiveFilter(a))).ToList();
             });
             await Section("manifests", async () => vm.Manifests = await _manifests.ListAsync(20));
             await Section("bin", async () =>

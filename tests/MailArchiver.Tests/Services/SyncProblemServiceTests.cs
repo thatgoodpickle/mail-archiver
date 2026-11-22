@@ -31,6 +31,24 @@ public class SyncPreCheckTests
         Assert.False(SyncPreCheck.AlreadyArchived(new (string, string, long?)[] { ("id@x", "INBOX", null) }, "id@x", 1000, "INBOX", gmail: false));
     }
 
+    [Fact]
+    public void AGmailAccountGetsTheMarketingFilterByDefault_AndBlankMeansNoFilter()
+    {
+        Assert.Equal("-label:Marketing", GmailAccount.EffectiveFilter(new MailAccount { ImapServer = "imap.gmail.com" }));                       // never set: the default
+        Assert.Equal("-label:Marketing", GmailAccount.DefaultFilter);
+        Assert.Null(GmailAccount.EffectiveFilter(new MailAccount { ImapServer = "imap.gmail.com", GmailSearchFilter = "" }));                    // explicitly none
+        Assert.Null(GmailAccount.EffectiveFilter(new MailAccount { ImapServer = "imap.gmail.com", GmailSearchFilter = "   " }));
+        Assert.Equal("-label:Marketing -from:boss@example.test", GmailAccount.EffectiveFilter(new MailAccount { ImapServer = "imap.gmail.com", GmailSearchFilter = "  -label:Marketing -from:boss@example.test " }));
+    }
+
+    [Fact]
+    public void OtherServersNeverFilter_WhateverIsStored()
+    {
+        Assert.Null(GmailAccount.EffectiveFilter(new MailAccount { ImapServer = "mail.example.test" }));
+        Assert.Null(GmailAccount.EffectiveFilter(new MailAccount { ImapServer = "mail.example.test", GmailSearchFilter = "-label:Marketing" }));
+        Assert.Null(GmailAccount.EffectiveFilter(new MailAccount { ImapServer = null }));
+    }
+
     [Theory]
     [InlineData("imap.gmail.com", true)]
     [InlineData("IMAP.GMAIL.COM", true)]

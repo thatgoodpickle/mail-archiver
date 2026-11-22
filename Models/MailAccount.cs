@@ -17,6 +17,13 @@ public class MailAccount
     
     // Folder exclusion functionality
     public string ExcludedFolders { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Fork: Gmail search applied to every folder search of the IMAP sync (Gmail's raw search, X-GM-RAW), for example
+    /// <c>-label:Marketing</c> (mail tagged Marketing or any sub-label is not downloaded). Null = the default for a Gmail account;
+    /// empty = explicitly no filter. Ignored by servers that are not Gmail. Changes are recorded in the audit chain.
+    /// </summary>
+    public string? GmailSearchFilter { get; set; }
     
     // Email deletion functionality
     public int? DeleteAfterDays { get; set; }

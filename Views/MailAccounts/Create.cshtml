@@ -160,6 +160,18 @@
                             <span asp-validation-for="Password" class="text-danger"></span>
                         </div>
 
+
+                        <div class="mb-3" id="gmailFilterBox">
+                            <label asp-for="GmailSearchFilter" class="form-label">Gmail search filter</label>
+                            <input asp-for="GmailSearchFilter" class="form-control" id="GmailSearchFilter" placeholder="-label:Marketing" autocomplete="off" />
+                            <div class="form-text">
+                                Only for Gmail accounts. Mail that matches this Gmail search is <strong>not archived</strong>. It is never downloaded. The default
+                                <code>-label:Marketing</code> skips everything you tag <em>Marketing</em> in Gmail, including its sub-labels (Gmail's search treats a
+                                parent label as including its sub-labels; check this with one test message). Leave it empty to archive everything.
+                                Changes are recorded in the audit chain.
+                            </div>
+                            <div class="form-text">You can test the filter against the mailbox after the account is saved (open the account, then Edit).</div>
+                        </div>
                         <div class="mb-3 form-check">
                             <input asp-for="UseSSL" class="form-check-input" />
                             <label asp-for="UseSSL" class="form-check-label">@Localizer["UseSSL"]</label>

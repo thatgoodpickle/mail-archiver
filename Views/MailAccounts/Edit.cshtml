@@ -1,4 +1,4 @@
-﻿@inject Microsoft.Extensions.Localization.IStringLocalizer<MailArchiver.SharedResource> Localizer
+@inject Microsoft.Extensions.Localization.IStringLocalizer<MailArchiver.SharedResource> Localizer
 @model MailArchiver.Models.ViewModels.MailAccountViewModel
 @{
     ViewData["Title"] = @Localizer["EditEmailAccount"];
@@ -153,6 +153,25 @@
                             </div>
                             <div class="form-text">@Localizer["LeaveEmptyToKeepCurrent"]</div>
                             <span asp-validation-for="Password" class="text-danger"></span>
+                        </div>
+
+                        <div class="mb-3" id="gmailFilterBox">
+                            <label asp-for="GmailSearchFilter" class="form-label">Gmail search filter</label>
+                            <input asp-for="GmailSearchFilter" class="form-control" id="GmailSearchFilter" placeholder="-label:Marketing" autocomplete="off" />
+                            <div class="form-text">
+                                Only for Gmail accounts. Mail that matches this Gmail search is <strong>not archived</strong>. It is never downloaded. The default
+                                <code>-label:Marketing</code> skips everything you tag <em>Marketing</em> in Gmail, including its sub-labels (Gmail's search treats a
+                                parent label as including its sub-labels; check this with one test message). Leave it empty to archive everything.
+                                Changes are recorded in the audit chain.
+                            </div>
+                            <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" id="btnTestGmailFilter" data-id="@Model.Id">Test the filter</button>
+                                <span id="gmailFilterResult" class="small" role="status"></span>
+                            </div>
+                            <div class="form-check mt-2 d-none" id="gmailFilterConfirmBox">
+                                <input asp-for="GmailFilterConfirmed" class="form-check-input" />
+                                <label asp-for="GmailFilterConfirmed" class="form-check-label small">I checked the numbers: this filter skips most of the mailbox, and that is what I want.</label>
+                            </div>
                         </div>
                         <div class="mb-3 form-check">
                             <input asp-for="UseSSL" class="form-check-input" />
@@ -462,6 +481,26 @@
 </div>
 @section Scripts {
     <script>
+        // Fork: test the Gmail search filter against the mailbox (counts only; nothing is changed on the server).
+        (function () {
+            var btn = document.getElementById('btnTestGmailFilter'); if (!btn) return;
+            var out = document.getElementById('gmailFilterResult'), box = document.getElementById('gmailFilterConfirmBox');
+            var tokenEl = document.querySelector('input[name="__RequestVerificationToken"]');
+            btn.addEventListener('click', function () {
+                out.textContent = 'Connecting to the mailbox...';
+                var body = new URLSearchParams({ id: btn.dataset.id, filter: document.getElementById('GmailSearchFilter').value });
+                fetch('@Url.Action("TestGmailFilter", "MailAccounts")', { method: 'POST', credentials: 'same-origin',
+                    headers: { 'RequestVerificationToken': tokenEl ? tokenEl.value : '', 'Content-Type': 'application/x-www-form-urlencoded' }, body: body })
+                    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                    .then(function (r) {
+                        if (!r.ok) { out.textContent = '✕ ' + r.message; box.classList.add('d-none'); return; }
+                        if (!r.total) { out.textContent = '✓ ' + r.message; box.classList.add('d-none'); return; }
+                        var half = r.skipped * 2 > r.total;
+                        out.textContent = (half ? '✕ ' : '✓ ') + 'The mailbox holds ' + r.total + ' messages. The filter lets ' + r.matching + ' through and skips ' + r.skipped + '.' + (half ? ' That is more than half.' : '');
+                        box.classList.toggle('d-none', !half);
+                    }).catch(function (e) { out.textContent = '✕ ' + e.message; });
+            });
+        })();
         const i18n = {
             errorSavingChanges: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Localizer["ErrorSavingChanges"].Value)),
             save: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Localizer["Save"].Value)),

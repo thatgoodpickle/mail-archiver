@@ -51,6 +51,9 @@ namespace MailArchiver.Migrations
                     b.Property<int?>("FullSyncIntervalHours")
                         .HasColumnType("integer");
 
+                    b.Property<string>("GmailSearchFilter")
+                        .HasColumnType("text");
+
                     b.Property<int?>("ImapPort")
                         .HasColumnType("integer");
 

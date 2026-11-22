@@ -142,6 +142,20 @@
                 <div id="chainResult" class="small" role="status"></div>
             </div>
 
+            @if (Model.GmailScopes.Count > 0)
+            {
+                <div class="ims-block">
+                    <h2 class="ims-h">What each Gmail mailbox is archived with</h2>
+                    <p class="text-muted small mb-2">Mail that matches a mailbox's Gmail search filter is never downloaded, so it is not in the archive. Changing a filter is recorded in the history log.</p>
+                    <ul class="small mb-0">
+                        @foreach (var g in Model.GmailScopes)
+                        {
+                            <li><strong>@g.Account</strong>: @(g.Filter == null ? "everything in the mailbox" : "everything except mail matching ")@if (g.Filter != null) { <code>@g.Filter</code> }</li>
+                        }
+                    </ul>
+                </div>
+            }
+
             <div class="ims-block">
                 <h2 class="ims-h">History fingerprint</h2>
                 <p class="text-muted small mb-2">
