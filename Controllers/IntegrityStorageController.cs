@@ -28,11 +28,14 @@ namespace MailArchiver.Controllers
         private readonly MailArchiver.Services.IAuthenticationService _auth;
         private readonly IAccessLogService _accessLog;
         private readonly ILogger<IntegrityStorageController> _logger;
+        private readonly ISyncProblemService? _problems;
 
         public IntegrityStorageController(MailArchiverDbContext db, ISettingsService settings, IIntegrityRunner runner,
             IAuditChainVerifier chain, IManifestService manifests, IOriginalBin bin, IAttachmentTextProcessor text,
-            MailArchiver.Services.IAuthenticationService auth, IAccessLogService accessLog, ILogger<IntegrityStorageController> logger)
+            MailArchiver.Services.IAuthenticationService auth, IAccessLogService accessLog, ILogger<IntegrityStorageController> logger,
+            ISyncProblemService? problems = null)
         {
+            _problems = problems;
             _db = db; _settings = settings; _runner = runner; _chain = chain; _manifests = manifests; _bin = bin;
             _text = text; _auth = auth; _accessLog = accessLog; _logger = logger;
         }
@@ -74,6 +77,14 @@ namespace MailArchiver.Controllers
             {
                 vm.BinStatus = await _bin.GetStatusAsync();
                 vm.BinItems = await _bin.ListBinAsync(50);
+            });
+            await Section("problems", async () =>
+            {
+                if (_problems == null) return;
+                vm.SyncProblems = await _problems.ListAsync(100);
+                vm.QuarantinedCount = await _problems.CountQuarantinedAsync();
+                var ids = vm.SyncProblems.Select(p => p.MailAccountId).Distinct().ToList();
+                vm.AccountNames = await _db.MailAccounts.AsNoTracking().Where(a => ids.Contains(a.Id)).ToDictionaryAsync(a => a.Id, a => a.Name);
             });
             await Section("text", async () => vm.TextStatus = await _text.GetStatusAsync());
             await Section("settings", async () =>
@@ -241,6 +252,22 @@ namespace MailArchiver.Controllers
             var r = await _bin.MoveToTrashAsync(sha, Who);
             await LogAsync($"move to the Trash requested for an original without a delete request {(sha.Length > 12 ? sha[..12] : sha)}: {(r.Restored ? "moved" : "not moved")}");
             return Json(new { ok = r.Restored, message = r.Message });
+        }
+
+        // ----------------------------------------------------------------------------------------- messages that could not be archived
+
+        /// <summary>Puts one quarantined message (or all) back into the normal flow; the next sync tries again.</summary>
+        [HttpPost, ValidateAntiForgeryToken]
+        public async Task<IActionResult> ProblemRetry(int? id)
+        {
+            if (_problems == null) return Json(new { ok = false, message = "Not available." });
+            try
+            {
+                var n = await _problems.RetryAsync(id, null);
+                await LogAsync($"retry requested for {(id.HasValue ? "one quarantined message" : "all quarantined messages")}: {n} put back");
+                return Json(new { ok = true, count = n, message = n == 0 ? "Nothing to retry." : $"{n} {(n == 1 ? "message" : "messages")} will be tried again at the next sync." });
+            }
+            catch (Exception ex) { return Json(new { ok = false, message = Short(ex) }); }
         }
 
         // ----------------------------------------------------------------------------------------- attachment text / OCR

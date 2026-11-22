@@ -12,6 +12,9 @@ namespace MailArchiver.Models.ViewModels
         public OriginalBinStatus? BinStatus { get; set; }
         public IReadOnlyList<OriginalBinItem> BinItems { get; set; } = Array.Empty<OriginalBinItem>();
         public AttachmentTextStatus? TextStatus { get; set; }
+        public IReadOnlyList<SyncProblemMessage> SyncProblems { get; set; } = Array.Empty<SyncProblemMessage>();
+        public int QuarantinedCount { get; set; }
+        public Dictionary<int, string> AccountNames { get; set; } = new();
         public IReadOnlyList<SettingView> Settings { get; set; } = Array.Empty<SettingView>();
         public Dictionary<string, string> Errors { get; } = new();
 

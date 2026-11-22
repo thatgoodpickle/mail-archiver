@@ -722,7 +722,7 @@ namespace MailArchiver.Services.Providers.Imap
                 var folderName = MailContentHelper.CleanText(folder.FullName ?? string.Empty);
                 foreach (var s in withIds)
                 {
-                    var hit = known.Any(k => k.MessageId == s.Envelope!.MessageId && k.Size == s.Size!.Value && (gmail || k.FolderName == folderName));
+                    var hit = MailArchiver.Services.Shared.SyncPreCheck.AlreadyArchived(known.Select(k => (k.MessageId, k.FolderName, k.Size)), s.Envelope!.MessageId, s.Size!.Value, folderName, gmail);
                     if (hit) skip[s.UniqueId.Id] = ((s.Envelope!.Date ?? s.InternalDate ?? DateTimeOffset.UtcNow).DateTime, s.Envelope!.MessageId);
                 }
                 if (skip.Count > 0)

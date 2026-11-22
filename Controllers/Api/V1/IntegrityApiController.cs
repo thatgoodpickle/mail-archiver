@@ -21,14 +21,16 @@ public class IntegrityApiController : ApiControllerBase
     private readonly IAuthenticationService _authService;
 
     private readonly IAuditChainVerifier? _chain;
+    private readonly ISyncProblemService? _problems;
     private readonly IManifestService? _manifests;
     private readonly IAccessLogService? _accessLog;
     private readonly IOriginalBin? _bin;
 
     public IntegrityApiController(MailArchiverDbContext context, IIntegrityRunner runner, IAuthenticationService authService,
         IAuditChainVerifier? chain = null, IManifestService? manifests = null, IAccessLogService? accessLog = null,
-        IOriginalBin? bin = null)
+        IOriginalBin? bin = null, ISyncProblemService? problems = null)
     {
+        _problems = problems;
         _bin = bin;
         _accessLog = accessLog;
         _manifests = manifests;
@@ -83,6 +85,29 @@ public class IntegrityApiController : ApiControllerBase
             return Accepted(BinRunDto(run));
         }
         catch (InvalidOperationException ex) { return Problem(statusCode: 409, title: ex.Message); }
+    }
+
+    /// <summary>Messages that failed repeatedly (second review N-02): quarantined ones are not fetched again until retried.</summary>
+    [HttpGet("sync-problems")]
+    public async Task<IActionResult> SyncProblems([FromQuery] int limit = 200)
+    {
+        if (_problems == null) return Problem(statusCode: 501, title: "Not available.");
+        var items = await _problems.ListAsync(limit);
+        return Ok(new
+        {
+            quarantined = await _problems.CountQuarantinedAsync(),
+            items = items.Select(p => new { id = p.Id, accountId = p.MailAccountId, folder = p.FolderName, uid = p.Uid, messageId = p.MessageId, reason = p.Reason, failCount = p.FailCount, status = p.Status, firstSeen = p.FirstSeen, lastSeen = p.LastSeen })
+        });
+    }
+
+    /// <summary>Puts quarantined messages back (all, or one by id); the next sync tries them again.</summary>
+    [HttpPost("sync-problems/retry")]
+    public async Task<IActionResult> SyncProblemsRetry([FromQuery] int? id = null)
+    {
+        if (_problems == null) return Problem(statusCode: 501, title: "Not available.");
+        var n = await _problems.RetryAsync(id, null);
+        await LogAsync($"retry of quarantined messages requested: {n} put back");
+        return Ok(new { retried = n });
     }
 
     /// <summary>What is in the bin: sha256, when it was binned, when it will be deleted permanently, size. No paths.</summary>

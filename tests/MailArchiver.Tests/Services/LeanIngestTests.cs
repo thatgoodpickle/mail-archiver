@@ -373,4 +373,68 @@ public class LeanIngestTests : IDisposable
         }
         finally { await CleanupAsync(ctx, account); }
     }
+
+    // ===== second review N-11: variants and Gmail folders =====================================================
+
+    private static (MimeMessage Message, byte[] Bytes) PlainMail(string messageId, string body)
+    {
+        var m = new MimeMessage();
+        m.From.Add(new MailboxAddress("", "a@example.test"));
+        m.To.Add(new MailboxAddress("", "b@example.test"));
+        m.Subject = "variant test";
+        m.MessageId = messageId;
+        m.Body = new TextPart("plain") { Text = body };
+        using var ms = new MemoryStream();
+        m.WriteTo(ms);
+        var bytes = ms.ToArray();
+        using var read = new MemoryStream(bytes);
+        return (MimeMessage.Load(read), bytes);
+    }
+
+    [Fact]
+    public async Task ADifferentMessageWithTheSameMessageId_IsKeptAsASecondEmail_AndTheSameBytesAgainIsADuplicate()
+    {
+        var ctx = NewContext();
+        var account = await SeedAccountAsync(ctx);
+        try
+        {
+            var id = $"{Guid.NewGuid():N}@example.test";
+            var (svc, _, _) = Make(ctx, Options_());
+            var (m1, b1) = PlainMail(id, "the first original");
+            var (m2, b2) = PlainMail(id, "a different original, same id (a list copy with a footer)");
+
+            Assert.Equal(ArchiveOutcome.Archived, await svc.ArchiveEmailOutcomeAsync(account, m1, false, "INBOX", new RawMessageCapture(b1, RawMessageSource.Imap)));
+            Assert.Equal(ArchiveOutcome.Archived, await svc.ArchiveEmailOutcomeAsync(account, m2, false, "INBOX", new RawMessageCapture(b2, RawMessageSource.Imap)));   // not dropped
+            Assert.Equal(ArchiveOutcome.Duplicate, await svc.ArchiveEmailOutcomeAsync(account, m1, false, "INBOX", new RawMessageCapture(b1, RawMessageSource.Imap)));
+            Assert.Equal(ArchiveOutcome.Duplicate, await svc.ArchiveEmailOutcomeAsync(account, m2, false, "INBOX", new RawMessageCapture(b2, RawMessageSource.Imap)));
+
+            ctx.ChangeTracker.Clear();
+            Assert.Equal(2, await ctx.ArchivedEmails.CountAsync(e => e.MailAccountId == account.Id));
+        }
+        finally { await CleanupAsync(ctx, account); }
+    }
+
+    [Theory]
+    [InlineData("imap.gmail.com", "Label A")]       // Gmail: the same message in another label folder keeps its first folder
+    [InlineData("mail.example.test", "Moved")]       // any other server: a moved message follows its folder, as upstream does
+    public async Task AMessageSeenInAnotherFolder_FlipsItsFolderOnlyOutsideGmail(string server, string secondFolder)
+    {
+        var ctx = NewContext();
+        var account = await SeedAccountAsync(ctx);
+        account.ImapServer = server;
+        await ctx.SaveChangesAsync();
+        try
+        {
+            var (svc, _, _) = Make(ctx, Options_());
+            var (m, b) = PlainMail($"{Guid.NewGuid():N}@example.test", "one message, two folders");
+
+            Assert.Equal(ArchiveOutcome.Archived, await svc.ArchiveEmailOutcomeAsync(account, m, false, "[Gmail]/All Mail", new RawMessageCapture(b, RawMessageSource.Imap)));
+            Assert.Equal(ArchiveOutcome.Duplicate, await svc.ArchiveEmailOutcomeAsync(account, m, false, secondFolder, new RawMessageCapture(b, RawMessageSource.Imap)));
+
+            ctx.ChangeTracker.Clear();
+            var email = await ctx.ArchivedEmails.SingleAsync(e => e.MailAccountId == account.Id);
+            Assert.Equal(server == "imap.gmail.com" ? "[Gmail]/All Mail" : secondFolder, email.FolderName);
+        }
+        finally { await CleanupAsync(ctx, account); }
+    }
 }

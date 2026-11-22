@@ -321,6 +321,56 @@
         </div>
     </div>
 
+    @* ================================================================ MESSAGES THAT COULD NOT BE ARCHIVED *@
+    <div class="card mb-3" id="problems">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Messages that could not be archived</strong>
+            @if (Model.QuarantinedCount > 0)
+            {
+                <button type="button" class="btn btn-outline-secondary btn-sm btn-problem-retry" data-id="">Try all again</button>
+            }
+        </div>
+        <div class="card-body">
+            @if (Model.Errors.TryGetValue("problems", out var probError))
+            {
+                <div class="alert alert-danger" role="alert">This part could not be loaded: @probError</div>
+            }
+            <p class="text-muted small">
+                A message that fails to archive several times in a row is set aside, so one bad message cannot hold back a whole mailbox. It stays on
+                the mail server, it is not fetched again on its own, and the account is <strong>not</strong> counted as completely archived while any
+                message is set aside. Try it again once the cause is fixed.
+            </p>
+            @if (Model.SyncProblems.Count == 0)
+            {
+                <p class="mb-0">✓ No messages are waiting.</p>
+            }
+            else
+            {
+                <p class="mb-2">@Model.QuarantinedCount @Plural(Model.QuarantinedCount, "message is", "messages are") set aside. @(Model.SyncProblems.Count - Model.QuarantinedCount > 0 ? (Model.SyncProblems.Count - Model.QuarantinedCount) + " more failed recently and will be tried again at the next sync." : "")</p>
+                <div id="problemMsg" class="small mb-2" role="status"></div>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead><tr><th>Mailbox</th><th>Folder</th><th>Message</th><th>Why</th><th class="text-end">Failures</th><th>State</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                        <tbody>
+                        @foreach (var p in Model.SyncProblems)
+                        {
+                            <tr>
+                                <td>@(Model.AccountNames.TryGetValue(p.MailAccountId, out var an) ? an : "#" + p.MailAccountId)</td>
+                                <td>@p.FolderName</td>
+                                <td><span class="small text-muted">UID @p.Uid</span>@(string.IsNullOrEmpty(p.MessageId) ? "" : " ")@if (!string.IsNullOrEmpty(p.MessageId)) { <code class="small">@(p.MessageId.Length > 40 ? p.MessageId[..40] + "…" : p.MessageId)</code> }</td>
+                                <td class="small">@(p.Reason.Length > 140 ? p.Reason[..140] + "…" : p.Reason)</td>
+                                <td class="text-end">@p.FailCount</td>
+                                <td>@(p.Status == "Quarantined" ? "Set aside" : "Will retry")</td>
+                                <td class="text-end">@if (p.Status == "Quarantined") { <button type="button" class="btn btn-outline-secondary btn-sm btn-problem-retry" data-id="@p.Id">Try again</button> }</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+
     @* ================================================================ ATTACHMENT TEXT *@
     <div class="card mb-3" id="text">
         <div class="card-header"><strong>Searching inside attachments and pictures</strong></div>
@@ -746,6 +796,16 @@
             post('BinRestore', { sha256: b.dataset.sha }).then(function (r) {
                 show(bm, r.message, r.ok); if (r.ok) setTimeout(function () { location.hash = '#bin'; location.reload(); }, 800);
             }).catch(fail(bm));
+        });
+    });
+
+    // ---- messages that could not be archived
+    document.querySelectorAll('.btn-problem-retry').forEach(function (b) {
+        b.addEventListener('click', function () {
+            var pm = document.getElementById('problemMsg') || bm;
+            post('ProblemRetry', b.dataset.id ? { id: b.dataset.id } : {}).then(function (r) {
+                show(pm, r.message, r.ok); if (r.ok && r.count > 0) setTimeout(function () { location.hash = '#problems'; location.reload(); }, 900);
+            }).catch(fail(pm));
         });
     });
 
