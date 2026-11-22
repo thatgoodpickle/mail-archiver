@@ -69,6 +69,8 @@
     .ims .ims-badge { display: inline-block; padding: .05rem .55rem; border: 1px solid rgba(127, 127, 127, .45); border-radius: 1rem; font-size: .75rem; font-weight: 400; color: inherit; background: transparent; }
     .ims .ims-intro { max-width: 60rem; }
     .ims .ims-block + .ims-block { border-top: 1px solid var(--border-color, #dee2e6); margin-top: 1.25rem; padding-top: 1.25rem; }
+    /* 'Set by the server' sits in its own card, apart from the form above and the locked list below. */
+    .ims .ims-block.ims-panel { border: 1px solid var(--border-color, #dee2e6); border-radius: .5rem; padding: 1rem 1.25rem; margin: 1.75rem 0; background: rgba(127, 127, 127, .06); }
     .ims .ims-row { padding: .9rem 0; border-top: 1px solid var(--border-color, #dee2e6); }
     .ims .ims-group > .ims-row:first-of-type { border-top: 0; }
     .ims .ims-result { border-left: 3px solid rgba(127, 127, 127, .6); padding: .4rem .75rem; margin-top: .5rem; white-space: pre-wrap; }
@@ -491,7 +493,7 @@
             </form>
 
             @* ---------------------------------------------------------------- set by the server *@
-            <div class="ims-block">
+            <div class="ims-block ims-panel">
                 <h2 class="ims-h">Set by the server</h2>
                 <p class="text-muted small">These could be changed here, but the server's own settings (the compose file or the environment) take priority and lock them.</p>
                 @if (pinned.Count == 0)
