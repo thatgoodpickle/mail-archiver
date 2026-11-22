@@ -3,7 +3,8 @@
 Branch `integrity` of the fork of s1t5/mail-archiver (GPL-3.0). Goal: an archive whose
 originals are kept byte-exact, can be restored to a mailbox, and whose integrity can be
 proven at any time. Mbox import is out of scope (its copy is re-serialized, see
-`RawMessageSource.Serialized`); capture comes from IMAP, Graph and EML files.
+`RawMessageSource.Serialized`) and is refused in lean mode and under `RawMessages:Required` (see
+"Lean storage for imports and Graph"); capture comes from IMAP, Graph and EML files.
 
 ## What already exists upstream (verified in the code)
 
@@ -159,6 +160,40 @@ verify also refuses; startup check that Required needs Enabled); Phase 2:
   A failed chain append is logged but does not block the action; the verifier reports unchained emails.
   A non-lean Required email whose original write fails AFTER the row is saved stays in the archive without
   its original (lean mode writes the original first, so it cannot happen there); verify-all reports it as NotStored.
+
+### Lean storage for imports and Graph (2026-11-22, CI green, 1428 tests)
+
+Until now only the IMAP sync archived lean; EML import and Graph stored the email in full. Now all three
+share one code path (`LeanArchive`: the lean/refuse decision and the lean row shape; `EmailCoreService`
+uses it unchanged):
+
+- **EML import** (`MailImporter`): under `Storage:Mode=Lean` the file bytes (`RawMessageSource.EmlFile`) are
+  written hash-named and verified first, every attachment is found again in the written file by hash, and
+  the row is stored lean; otherwise it is stored in full, or refused under `RawMessages:Required`.
+- **Graph sync** (`GraphMailArchiver`): same, with the MIME message Graph returns as the original
+  (`RawMessageSource.Graph`; needs `RawMessages__IncludeGraph=true`, the default, otherwise there is no original
+  and the email is stored in full or refused under Required). A body synthesized from an `.ics` attachment is
+  not part of the original, so such an email is stored in full, as for IMAP. Duplicate checks are unchanged.
+- **Index fields come from the original.** The import's parsed copy may have been header-recovered or cleaned,
+  and the Graph copy comes from the Graph JSON (its text body is the 255-character preview) and the Graph
+  attachment API. IntegrityService compares the database copy with the parse of the stored original, so for
+  these two paths the subject, sender, recipients and text body of a lean row are re-derived from the verified
+  original (`LeanIndexFields`, shared with IntegrityService). If the original cannot be parsed again the
+  email is stored in full. Consequence worth knowing: for an import with several `From` addresses the lean row
+  keeps the first, like IMAP does. Graph's display names are kept from the Graph JSON.
+- **mbox is refused** when `Storage:Mode=Lean` or `RawMessages:Required=true`, unless
+  `Storage:AllowSerializedImports=true`. The check runs when the web form is opened and submitted (the page
+  shows the reason), at the start of every import job (so the queue and the command-line import end as a
+  failed job with the reason) and nothing is read from the file. With the setting on, mbox imports work as
+  upstream: the original is the re-serialized message, labelled `serialized`, and in lean mode the row is lean
+  from that copy. `serialized` originals prove only that the archive holds what was imported, not what was delivered.
+- **Chain:** the audit-chain interceptor sits on the RawMessages insert, so EML and Graph lean rows get their
+  `original.stored` entry like IMAP rows (tested).
+- **Not covered:** the Graph archiver needs a live Graph client, so its end-to-end path is not unit tested;
+  the lean step it calls is tested with a Graph-shaped email. Existing emails are not converted.
+- **Risk under Required:** a Graph attachment that cannot be found again in the MIME original (an item
+  attachment, for example) means "no verified original", so such a message is refused until stored in full is
+  allowed (turn `Required` off) or the attachment handling is extended.
 
 ### OCR step A: attachment text for search (2026-11-22, CI green, 1388 tests)
 

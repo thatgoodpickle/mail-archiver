@@ -331,6 +331,7 @@ complete original is stored as well.
 | `RawMessages__FileSystem__HashNamed` | `false` | Fork option: name originals by their SHA-256 instead of the email id (see the original message storage page). |
 | `Integrity__VerifyAllIntervalHours` | `0` | Fork option: run the verify-all integrity pass every this many hours. `0` disables the schedule; a pass can always be started with `POST /api/v1/integrity/runs`. |
 | `Integrity__ScheduleStartupDelayMinutes` | `10` | Delay before the first scheduled pass. |
+| `Storage__AllowSerializedImports` | `false` | Fork option: mbox files hold re-serialized copies, so an mbox import is refused (web form, queue and command line) when `Storage__Mode=Lean` or `RawMessages__Required=true`. Set `true` to allow it anyway; the stored originals are then labelled `serialized`. EML import and Graph sync archive lean like IMAP and are not affected. |
 | `Storage__Mode` | `Standard` | Fork option: `Lean` archives from the verified original and keeps only index data in the database. Requires `RawMessages__Enabled=true`, `RawMessages__Storage=filesystem`, `RawMessages__FileSystem__HashNamed=true` and `RawMessages__MaxMessageSizeMb=0`; the application refuses to start otherwise. |
 | `RawMessages__FileSystem__VerifyChecksumOnRead` | `true` | Verify the SHA-256 on every download. |
 | `RawMessages__FileSystem__OrphanCleanupEnabled` | `true` | Remove message files that no email refers to. |
