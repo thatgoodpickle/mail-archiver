@@ -257,14 +257,35 @@ public class LeanImportTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task EmlImport_Lean_WithRequired_RefusesWhatItCannotVerify_AndSavesNothing()
+    public async Task EmlImport_Lean_WithRequired_WhenAnAttachmentCannotBeFoundAgain_StoresInFullWithTheVerifiedOriginal()
     {
+        // Review F-02/F-08: Required refuses only when NO verified original exists. Here the original is written and
+        // verified; only the lean form is impossible, so the email is kept in full together with that original.
         var s = Build(Raw(required: true), Lean());
         var account = await SeedAccountAsync(s.Ctx);
         try
         {
             var (msg, original) = Mismatched();
             var result = await s.Importer.ImportEmailToDatabase(msg, account, "job", "INBOX", new RawMessageCapture(original, RawMessageSource.EmlFile));
+            Assert.True(result.Success);
+
+            s.Ctx.ChangeTracker.Clear();
+            var email = await s.Ctx.ArchivedEmails.Include(e => e.RawMessage).SingleAsync(e => e.MailAccountId == account.Id);
+            Assert.False(email.ContentStripped);
+            Assert.Equal(RawMessageCodec.ComputeSha256(original), email.RawMessage!.Sha256);
+        }
+        finally { await CleanupAsync(s.Ctx, account); }
+    }
+
+    [Fact]
+    public async Task EmlImport_Lean_WithRequired_RefusesWhenThereIsNoOriginalAtAll_AndSavesNothing()
+    {
+        var s = Build(Raw(required: true), Lean());
+        var account = await SeedAccountAsync(s.Ctx);
+        try
+        {
+            var (msg, _) = Mismatched();
+            var result = await s.Importer.ImportEmailToDatabase(msg, account, "job", "INBOX", rawMessage: null);
             Assert.False(result.Success);
 
             s.Ctx.ChangeTracker.Clear();

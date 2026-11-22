@@ -251,6 +251,7 @@ public class EmailsApiController : ApiControllerBase
         }
 
         var report = await _integrityService.VerifyAsync(id);
+        await _accessLogService.LogAccessAsync(CurrentUsername, AccessLogType.Integrity, emailId: id);   // F-24
         return Ok(new
         {
             emailId = report.EmailId,

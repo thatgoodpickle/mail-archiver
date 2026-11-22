@@ -416,6 +416,8 @@ namespace MailArchiver.Controllers
                 return NotFound();
 
             var report = await _integrityService.VerifyAsync(id);
+            if (_accessLogService != null && _authService != null)   // F-24
+                await _accessLogService.LogAccessAsync(_authService.GetCurrentUserDisplayName(HttpContext) ?? "unknown", AccessLogType.Integrity, emailId: id);
             return Json(new
             {
                 emailId = report.EmailId,

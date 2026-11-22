@@ -2,6 +2,7 @@
 """Compare two signed manifests of the mail archive (for example last month's backup against today).
 
 Usage:  compare-manifests.py <old-manifest-dir> <new-manifest-dir> [--old NAME] [--new NAME]
+                              [--pubkey-sha256 HEX] [--allow-key-change]
 
 Each directory is a copy of the archive's Manifests folder (manifest-*.json/.sig/.jsonl and public-key.pem).
 Without --old/--new the newest manifest in the directory is used. For each manifest the script first checks
@@ -13,6 +14,10 @@ matches the hash in the signed header, then compares the two entry lists:
   NEW      emails that appeared since (informational)
 
 Exit code 0 = nothing missing or changed, 1 = at least one MISSING/CHANGED or a failed check, 2 = usage/IO error.
+Key pinning: the two directories must carry the SAME public key (SHA-256 of its DER form, as the anchor
+line's pubkey= shows); with --pubkey-sha256 both must equal that value (take it from your anchor log, not from
+the archive). A different key fails unless --allow-key-change is given. Otherwise a re-keyed and re-signed
+manifest set would verify against its own new key.
 A MISSING email can be a legitimate deletion: look the ids up in the archive's access log (type Deletion).
 Reads only; it changes nothing. Python 3 standard library only.
 """
@@ -23,6 +28,14 @@ def newest(d):
     if not names:
         sys.exit(f"no manifest-*.json in {d}")
     return names[-1]
+
+def key_fingerprint(d):
+    """SHA-256 (hex) of the DER public key in <d>/public-key.pem, or None when it cannot be computed."""
+    pub = os.path.join(d, "public-key.pem")
+    if not os.path.exists(pub) or shutil.which("openssl") is None:
+        return None
+    r = subprocess.run(["openssl", "pkey", "-pubin", "-in", pub, "-outform", "DER"], capture_output=True)
+    return hashlib.sha256(r.stdout).hexdigest() if r.returncode == 0 and r.stdout else None
 
 def load(d, name):
     """Returns (entries {emailId: sha256}, header dict, problems list)."""
@@ -63,6 +76,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("old_dir"); ap.add_argument("new_dir")
     ap.add_argument("--old"); ap.add_argument("--new")
+    ap.add_argument("--pubkey-sha256"); ap.add_argument("--allow-key-change", action="store_true")
     a = ap.parse_args()
     try:
         old_name = a.old or newest(a.old_dir)
@@ -75,6 +89,15 @@ def main():
     print(f"old: {old_name}  ({len(old)} originals, generated {oh.get('generatedAt')}, chain seq {oh.get('chainSeq')})")
     print(f"new: {new_name}  ({len(new)} originals, generated {nh.get('generatedAt')}, chain seq {nh.get('chainSeq')})")
     bad = bool(p1 or p2)
+    fo, fn = key_fingerprint(a.old_dir), key_fingerprint(a.new_dir)
+    if fo is None or fn is None:
+        print("PROBLEM: a public key fingerprint could not be computed (public-key.pem or openssl missing)"); bad = True
+    else:
+        print(f"public key: old {fo[:16]}...  new {fn[:16]}...")
+        if a.pubkey_sha256 and (fo != a.pubkey_sha256 or fn != a.pubkey_sha256):
+            print("PROBLEM: a public key differs from the pinned --pubkey-sha256"); bad = True
+        elif fo != fn and not a.allow_key_change:
+            print("PROBLEM: the two manifests were signed with DIFFERENT keys (use --allow-key-change only if you changed the key on purpose)"); bad = True
     for p in p1 + p2:
         print("PROBLEM:", p)
 

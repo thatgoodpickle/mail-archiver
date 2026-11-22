@@ -248,9 +248,12 @@ public class ReviewFixesIntegrityTests : IAsyncLifetime, IDisposable
         var runs = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => runner.StartAsync("test")));
         await runner.WaitForCurrentAsync();
 
-        Assert.Single(runs.Select(r => r.Id).Distinct());
+        // A run may finish before the next caller arrives (a new run is then legitimate); what must never happen is
+        // the second concurrent start marking a run it did not start as "Interrupted".
         await using var read = _kit.NewContext();
-        var run = await read.IntegrityRuns.AsNoTracking().SingleAsync(r => r.Id == runs[0].Id);
-        Assert.Equal(IntegrityRun.Completed, run.Status);
+        var ids = runs.Select(r => r.Id).Distinct().ToList();
+        var states = await read.IntegrityRuns.AsNoTracking().Where(r => ids.Contains(r.Id)).Select(r => new { r.Status, r.Error }).ToListAsync();
+        Assert.All(states, st => Assert.Equal(IntegrityRun.Completed, st.Status));
+        Assert.DoesNotContain(states, st => (st.Error ?? "").Contains("Interrupted"));
     }
 }

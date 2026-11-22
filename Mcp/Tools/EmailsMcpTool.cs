@@ -285,6 +285,7 @@ public class EmailsMcpTool : McpToolBase
         }
 
         var report = await _integrityService.VerifyAsync(id);
+        await _accessLogService.LogAccessAsync(CurrentUsername, AccessLogType.Integrity, emailId: id);   // F-24
         return new
         {
             emailId = report.EmailId,

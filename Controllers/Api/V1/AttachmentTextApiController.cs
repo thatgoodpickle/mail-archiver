@@ -1,4 +1,6 @@
 using MailArchiver.Attributes;
+using MailArchiver.Models;
+using MailArchiver.Services;
 using MailArchiver.Services.Shared;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,7 +15,20 @@ public class AttachmentTextApiController : ApiControllerBase
 {
     private readonly IAttachmentTextProcessor _processor;
 
-    public AttachmentTextApiController(IAttachmentTextProcessor processor) => _processor = processor;
+    private readonly IAccessLogService? _accessLog;
+    private readonly IAuthenticationService? _authService;
+
+    public AttachmentTextApiController(IAttachmentTextProcessor processor, IAccessLogService? accessLog = null, IAuthenticationService? authService = null)
+    {
+        _processor = processor;
+        _accessLog = accessLog;
+        _authService = authService;
+    }
+
+    // F-24: a rescan deletes results, so it is logged (and chained) with who asked.
+    private Task LogAsync(string what)
+        => _accessLog == null ? Task.CompletedTask
+            : _accessLog.LogAccessAsync(_authService?.GetCurrentUserDisplayName(HttpContext) ?? "unknown", AccessLogType.Integrity, searchParameters: what);
 
     /// <summary>
     /// Counts of results by status (Done, NeedsOcr, Unsupported, Failed) and method, attachments still waiting
@@ -43,12 +58,17 @@ public class AttachmentTextApiController : ApiControllerBase
     public async Task<IActionResult> Rescan([FromQuery] string scope = "failed")
     {
         if (string.Equals(scope, "needsocr", StringComparison.OrdinalIgnoreCase))
-            return Ok(new { scope = "needsocr", removed = await _processor.RescanNeedsOcrAsync() });
+        {
+            var needs = await _processor.RescanNeedsOcrAsync();
+            await LogAsync($"attachment-text rescan scope=needsocr removed={needs}");
+            return Ok(new { scope = "needsocr", removed = needs });
+        }
 
         if (!string.Equals(scope, "failed", StringComparison.OrdinalIgnoreCase) && !string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase))
             return Problem(statusCode: 400, title: "scope must be 'failed', 'needsocr' or 'all'.");
 
         var removed = await _processor.RescanAsync(string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase));
+        await LogAsync($"attachment-text rescan scope={scope.ToLowerInvariant()} removed={removed}");
         return Ok(new { scope = scope.ToLowerInvariant(), removed });
     }
 }

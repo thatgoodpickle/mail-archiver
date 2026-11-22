@@ -10,6 +10,7 @@
 #         a command line: curl gets the header on stdin.
 #
 # Checks before it appends (exit 1 and no append when one fails):
+#   - the manifest public-key fingerprint is the one stored before (pinned once a manifest exists)
 #   - the chain verifies (GET chain/verify -> "ok":true)
 #   - the new head is not behind the last stored one, and an equal seq has the same hash
 #   - the archive STILL holds the stored head's hash at that sequence number (GET chain/entries/N).
@@ -37,6 +38,13 @@ if [ -s "$file" ]; then
   lseq=$(sed -n 's/.* seq=\([0-9]*\) .*/\1/p' <<<"$last")
   lhash=$(sed -n 's/.* hash=\([0-9a-f]*\) .*/\1/p' <<<"$last")
   if [ "$seq" -lt "$lseq" ]; then echo "ALARM: chain head went BACKWARDS ($lseq -> $seq)" >&2; exit 1; fi
+  # The manifest signing key must not change behind our back (a re-keyed, re-signed manifest set would verify).
+  # '-' means "no manifest yet"; from then on the fingerprint is pinned.
+  pub=$(sed -n 's/.* pubkey=\([0-9a-f-]*\).*/\1/p' <<<"$line")
+  lpub=$(sed -n 's/.* pubkey=\([0-9a-f-]*\).*/\1/p' <<<"$last")
+  if [ -n "$lpub" ] && [ "$lpub" != "-" ] && [ "$pub" != "$lpub" ]; then
+    echo "ALARM: the manifest signing key changed (was $lpub, now $pub)" >&2; exit 1
+  fi
   if [ "$seq" -eq "$lseq" ] && [ "$hash" != "$lhash" ]; then echo "ALARM: same seq $seq, different hash" >&2; exit 1; fi
   if [ "$seq" -eq "$lseq" ]; then echo "no change (seq $seq)"; exit 0; fi
   # Ahead of the stored head: the old head must still be in the chain, byte for byte.

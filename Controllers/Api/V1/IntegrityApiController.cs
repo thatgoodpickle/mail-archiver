@@ -22,16 +22,23 @@ public class IntegrityApiController : ApiControllerBase
 
     private readonly IAuditChainVerifier? _chain;
     private readonly IManifestService? _manifests;
+    private readonly IAccessLogService? _accessLog;
 
     public IntegrityApiController(MailArchiverDbContext context, IIntegrityRunner runner, IAuthenticationService authService,
-        IAuditChainVerifier? chain = null, IManifestService? manifests = null)
+        IAuditChainVerifier? chain = null, IManifestService? manifests = null, IAccessLogService? accessLog = null)
     {
+        _accessLog = accessLog;
         _manifests = manifests;
         _chain = chain;
         _context = context;
         _runner = runner;
         _authService = authService;
     }
+
+    // F-24: integrity and audit actions leave an access-log entry (and so a chain entry) with who did what.
+    private Task LogAsync(string what)
+        => _accessLog == null ? Task.CompletedTask
+            : _accessLog.LogAccessAsync(_authService.GetCurrentUserDisplayName(HttpContext) ?? "unknown", AccessLogType.Integrity, searchParameters: what);
 
     private static object Dto(IntegrityRun r) => new
     {
@@ -48,6 +55,7 @@ public class IntegrityApiController : ApiControllerBase
     public async Task<IActionResult> Start()
     {
         var run = await _runner.StartAsync(_authService.GetCurrentUserDisplayName(HttpContext));
+        await LogAsync($"verify-all run {run.Id} started");
         return Accepted(Dto(run));
     }
 
@@ -107,6 +115,7 @@ public class IntegrityApiController : ApiControllerBase
     {
         if (_chain == null) return Problem(statusCode: 501, title: "The audit chain is not available.");
         var r = await _chain.VerifyAsync();
+        await LogAsync("audit chain verified");
         return Ok(new
         {
             ok = r.Ok, entries = r.Entries,
@@ -125,6 +134,7 @@ public class IntegrityApiController : ApiControllerBase
     {
         if (_manifests == null) return Problem(statusCode: 501, title: "Manifests are not available.");
         var m = await _manifests.CreateAsync(_authService.GetCurrentUserDisplayName(HttpContext));
+        await LogAsync($"manifest {m.Name} created");
         return Ok(m);
     }
 
@@ -141,6 +151,7 @@ public class IntegrityApiController : ApiControllerBase
     {
         if (_manifests == null) return Problem(statusCode: 501, title: "Manifests are not available.");
         var check = await _manifests.VerifyAsync(name);
+        if (check != null) await LogAsync($"manifest {check.Name} verified");
         return check == null ? NotFound() : Ok(check);
     }
 

@@ -46,6 +46,8 @@ namespace MailArchiver.Models
         DeletionPolicy,
         SyncAcknowledgeFailures,
         Retention,
-        AuditExport
+        AuditExport,
+        /// <summary>Fork: an integrity or audit-chain check or action (verify, manifest, rescan).</summary>
+        Integrity
     }
 }
