@@ -48,6 +48,13 @@ namespace MailArchiver.Models
         // Plain-text Body, headers and list fields always stay. See doc/INTEGRITY-DESIGN.md.
         public bool ContentStripped { get; set; } = false;
 
+        // Fork (attachment text, see AttachmentTextProcessor): text read out of the attachments, kept only
+        // so search can find words that exist only inside an attachment. Derived and rebuildable; it is
+        // never shown, exported, compared by the integrity check or restored. AttachmentTextAt is set once
+        // the email's attachments have all been read (also when they held no text).
+        public string? AttachmentText { get; set; }
+        public DateTime? AttachmentTextAt { get; set; }
+
         public virtual MailAccount MailAccount { get; set; }
         public virtual ICollection<EmailAttachment> Attachments { get; set; } = new List<EmailAttachment>();
 

@@ -259,6 +259,12 @@ namespace MailArchiver.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("AttachmentText")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("AttachmentTextAt")
+                        .HasColumnType("timestamp without time zone");
+
                     b.Property<string>("Bcc")
                         .IsRequired()
                         .HasColumnType("text");
@@ -394,6 +400,44 @@ namespace MailArchiver.Migrations
                         .HasDatabaseName("IX_AttachmentContents_Hash");
 
                     b.ToTable("AttachmentContents", "mail_archiver");
+                });
+
+            modelBuilder.Entity("MailArchiver.Models.AttachmentText", b =>
+                {
+                    b.Property<string>("Sha256")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Engine")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("EngineVersion")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("ExtractedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("Method")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Sha256");
+
+                    b.HasIndex("Status");
+
+                    b.ToTable("AttachmentTexts", "mail_archiver");
                 });
 
             modelBuilder.Entity("MailArchiver.Models.AuditChainEntry", b =>

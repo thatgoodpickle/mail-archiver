@@ -20,6 +20,7 @@ namespace MailArchiver.Data
         public DbSet<IntegrityRun> IntegrityRuns { get; set; }
         public DbSet<IntegrityFinding> IntegrityFindings { get; set; }
         public DbSet<AuditChainEntry> AuditChain { get; set; }
+        public DbSet<AttachmentText> AttachmentTexts { get; set; }
         public DbSet<User> Users { get; set; }
         public DbSet<UserMailAccount> UserMailAccounts { get; set; }
         public DbSet<AccessLog> AccessLogs { get; set; }
@@ -217,6 +218,14 @@ namespace MailArchiver.Data
 
             modelBuilder.Entity<AttachmentContent>()
                 .ToTable("AttachmentContents", "mail_archiver");
+
+            modelBuilder.Entity<AttachmentText>(e =>
+            {
+                e.ToTable("AttachmentTexts", "mail_archiver");
+                e.HasKey(x => x.Sha256);
+                e.Property(x => x.ExtractedAt).HasColumnType("timestamp without time zone");
+                e.HasIndex(x => x.Status);
+            });
 
             // Fork: tamper-evident audit trail. The sequence number is assigned by the writer (under a
             // lock), never by the database, because it is part of the hash.

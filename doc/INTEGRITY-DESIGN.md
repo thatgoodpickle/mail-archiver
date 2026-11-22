@@ -287,6 +287,45 @@ Postgres). Behind a flag (`Storage:Mode=Lean`) so upstream merges stay possible.
 - **Measure before deciding more:** after the first sync compare `du` of the originals with
   the Postgres size (index cost); thao import in Open Archiver is a comparable data point.
 
+### Storage comparison on the thao import (measured 2026-11-22)
+
+Data set: thao@deptco mbox, 15,647 messages (one of 15,648 missing, not chased), Takeout mbox 5.3 GB.
+
+**Open Archiver (measured on clio after the ingest finished, all 15,647 indexed):**
+
+| Part | Size |
+|---|---|
+| Originals: one `.eml` per email, attachments inside the file, no separate attachment store (15,647 files, about 345 KB each) | 5.4 GB |
+| Search index (Meilisearch volume; probably includes Tika text incl. OCR) | 2.2 GB |
+| Postgres database (`pg_database_size`) | 34 MB |
+| **Total** | **about 7.6 GB (1.45x the mbox)** |
+
+The staged mbox copy (`storage/temp/thao.mbox`, 5.3 GB) is extra and can be deleted. Open Archiver
+stores one original; its overhead is the search index, not a second body copy.
+
+**gzip gain (measured):** 200 random stored files, 55.0 MB raw -> 32.6 MB gzipped (default level),
+about 41% saved (about 59% of original size). Two files with spaces in the name failed on both
+sides of the test (same omission, small bias). Clears the 20% revisit threshold, so gzip stays.
+
+**Fork, lean mode (ESTIMATE, never ingested real mail):** gzipped originals about 3.2 GB
+(5.4 GB x 0.59) plus the DB. The DB is NOT near zero: lean mode keeps the plain-text `Body`
+(search source, see above) plus index cards. Body text size is unmeasured, so the total is
+about 3.5 to 4.5 GB, roughly half of Open Archiver, as long as the tsvector is built on the fly
+(open question above; a stored vector or GIN index would add to it).
+
+**Mail-Archiver upstream, original plus parsed copy (weak ESTIMATE):** about 2x the originals,
+10 GB or more; share of attachment bytes in the parsed copy not measured.
+
+**Not decided by storage alone:** the saving is about 3-4 GB per 15k messages, small next to the
+audit goals. Open Archiver's free edition lacks the audit log and legal hold.
+
+**Open checks:**
+- Search speed: Postgres `to_tsvector('simple')` on the fly (fork) vs Meilisearch (Open Archiver),
+  measure with several mailboxes loaded before committing.
+- OCR later needs its own text store, adding to the lean figure.
+- Disk: clio has 24 GB free of 64 GB; all three mailboxes in Open Archiver about 23 GB, lean
+  about 10 to 13 GB. Grow the disk before the Gmail IMAP syncs.
+
 ## Conventions
 
 - New code in new files; one migration per schema change, named
