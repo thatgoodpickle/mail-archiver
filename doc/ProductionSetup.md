@@ -7,8 +7,12 @@ and Gmail keeps every message.
 
 ## 1. Before you start
 
-- [ ] Free disk on the VM: `df -h /opt/stacks`. Rule of thumb: at least **3x the mailbox size** free (lean storage is expected to need
-      roughly 0.7 to 0.9x of the mailbox, but that estimate is unproven; attachments are stored whole inside each original).
+- [ ] Free disk on the VM: `df -h /opt/stacks`. Two different numbers, do not mix them up:
+      (1) **What the archive is expected to use:** about 0.7 to 0.9 times the mailbox size (an unproven estimate: it comes from a
+      compression test on a sample, not from real mail). (2) **What to have free before you start:** at least **3 times the mailbox
+      size**, as a safety margin (database, the Trash, logs, growth, and the estimate being wrong). Use the storage figure Gmail shows
+      for that account as the "mailbox size". After the first 1,000 messages, measure for real: `du -sh originals pgdata`, divide by
+      the number of emails, and scale to the whole mailbox.
 - [ ] The VM is in the PBS backup job (whole VM, daily). Enable the QEMU guest agent on the VM so a backup can freeze the file systems.
 - [ ] The test stack is removed (`/opt/stacks/mail-archive-test`), or at least stopped, so nothing confuses the two.
 - [ ] A password manager for: the admin password you will choose, the Gmail app password, and the database password.
