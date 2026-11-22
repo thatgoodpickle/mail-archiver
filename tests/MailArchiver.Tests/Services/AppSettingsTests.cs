@@ -152,7 +152,7 @@ public class AppSettingsTests : IAsyncLifetime
         Assert.False(r.Ok);
         Assert.Contains("Ocr__MaxPages", r.Message);
         Assert.Equal(7, h.Mon<AttachmentTextOptions>().CurrentValue.MaxPages);
-        Assert.Empty(h.Chain.Entries);
+        Assert.DoesNotContain(h.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
         Assert.Equal("99", await StoredAsync("Ocr:MaxPages"));   // untouched
     }
 
@@ -189,7 +189,7 @@ public class AppSettingsTests : IAsyncLifetime
         var r = await h.ChangeAsync(key, value, "secret");
         Assert.False(r.Ok);
         Assert.Null(await StoredAsync(key));
-        Assert.Empty(h.Chain.Entries);
+        Assert.DoesNotContain(h.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
         Assert.Empty(h.Log.Rows);
     }
 
@@ -238,7 +238,7 @@ public class AppSettingsTests : IAsyncLifetime
             Assert.Null(await StoredAsync(d.Key));
         }
         Assert.False((await h.ChangeAsync("No:SuchSetting", "1")).Ok);
-        Assert.Empty(h.Chain.Entries);
+        Assert.DoesNotContain(h.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
         Assert.Empty(h.Log.Rows);
     }
 
@@ -335,7 +335,7 @@ public class AppSettingsTests : IAsyncLifetime
         var h = NewHarness();
         var r = await h.ChangeAsync("Ocr:MaxPages", "20");   // the default
         Assert.True(r.Ok);
-        Assert.Empty(h.Chain.Entries);
+        Assert.DoesNotContain(h.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
         Assert.Empty(h.Log.Rows);
         Assert.Null(await StoredAsync("Ocr:MaxPages"));
     }
@@ -354,7 +354,7 @@ public class AppSettingsTests : IAsyncLifetime
         Assert.False(wrong.Ok);
         Assert.Contains("not correct", wrong.Message);
         Assert.Equal(30, h.Mon<RawMessageOptions>().CurrentValue.OriginalCleanup.BinRetentionDays);
-        Assert.Empty(h.Chain.Entries);
+        Assert.DoesNotContain(h.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
 
         var right = await h.ChangeAsync("RawMessages:OriginalCleanup:BinRetentionDays", "10", "secret", userId: 41);
         Assert.True(right.Ok, right.Message);
@@ -419,7 +419,7 @@ public class AppSettingsTests : IAsyncLifetime
         Assert.Contains("single sign-on", r.Message);
         Assert.Contains("RawMessages__OriginalCleanup__Enabled", r.Message);
         Assert.True(h.Mon<RawMessageOptions>().CurrentValue.OriginalCleanup.Enabled);
-        Assert.Empty(h.Chain.Entries);
+        Assert.DoesNotContain(h.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
     }
 
     [Fact]
@@ -541,7 +541,7 @@ public class AppSettingsTests : IAsyncLifetime
             new[] { new SettingChange("Ocr:MaxPages", "20") }, new SettingActor(1, "admin"), null);   // 20 is the standard value
         Assert.True(r.Applied);
         Assert.Empty(r.RowErrors);
-        Assert.Empty(h.Chain.Entries);
+        Assert.DoesNotContain(h.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
         Assert.Null(await StoredAsync("Ocr:MaxPages"));
     }
 
@@ -560,7 +560,7 @@ public class AppSettingsTests : IAsyncLifetime
         Assert.Equal(4, r.RowErrors.Count);
         Assert.False(r.RowErrors.ContainsKey("Ocr:MaxPages"));
         Assert.Null(await StoredAsync("Ocr:MaxPages"));
-        Assert.Empty(h.Chain.Entries);
+        Assert.DoesNotContain(h.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
     }
 
     // ------------------------------------------------------------------------------------------ wording and the password rule

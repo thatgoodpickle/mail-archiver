@@ -197,7 +197,7 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
 
         Assert.Contains("locked", vm.SettingErrors[key]);
         Assert.False(await k.Db.AppSettings.AnyAsync());
-        Assert.Empty(k.Settings.Chain.Entries);
+        Assert.DoesNotContain(k.Settings.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
         Assert.Equal("44", vm.PostedValues["Ocr:MaxPages"]);        // what was typed is shown again
         Assert.Equal("99", vm.PostedValues["Ocr:Threads"]);
         Assert.False(await k.Db.AppSettings.AnyAsync());            // nothing was applied, not even the good row
-        Assert.Empty(k.Settings.Chain.Entries);
+        Assert.DoesNotContain(k.Settings.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
         Assert.Empty(k.Settings.Log.Rows);
     }
 
@@ -256,7 +256,7 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
         var wrong = ShownAgain(await k.Controller.SaveSettings(Form(mixed.Append(("password", "nope")).ToArray())));
         Assert.Contains("not correct", wrong.PasswordProblem);
         Assert.False(await k.Db.AppSettings.AnyAsync());
-        Assert.Empty(k.Settings.Chain.Entries);
+        Assert.DoesNotContain(k.Settings.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
 
         // The right password: both are applied, one record each.
         var ok = await k.Controller.SaveSettings(Form(mixed.Append(("password", "secret")).ToArray()));
@@ -293,7 +293,7 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
 
         Assert.Equal(false, k.Controller.TempData["SettingsOk"]);
         Assert.False(await k.Db.AppSettings.AnyAsync());
-        Assert.Empty(k.Settings.Chain.Entries);
+        Assert.DoesNotContain(k.Settings.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
     }
 
     [Fact]
@@ -315,7 +315,7 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
 
         Assert.Equal(true, k.Controller.TempData["SettingsOk"]);
         Assert.False(await k.Db.AppSettings.AnyAsync());
-        Assert.Empty(k.Settings.Chain.Entries);
+        Assert.DoesNotContain(k.Settings.Chain.Entries, e => e.Kind != "setting.password-failed");   // wrong passwords are chained (N-19), nothing else
     }
 
     [Fact]
@@ -444,7 +444,7 @@ public class IntegrityStorageControllerTests : IAsyncLifetime
         var result = Assert.IsType<PhysicalFileResult>(await k.Controller.DownloadManifestFile("manifest-20261122T000000Z", "sig"));
         Assert.Equal("manifest-20261122T000000Z.sig", result.FileName.Split('/').Last());
         Assert.Equal("application/octet-stream", result.ContentType);
-        Assert.Contains(k.Log.Rows, r => r.Type == AccessLogType.Integrity && r.Text!.Contains("downloaded"));
+        Assert.DoesNotContain(k.Log.Rows, r => r.Text != null && r.Text.Contains("downloaded"));   // N-18: a GET writes no audit record
     }
 
     // ------------------------------------------------------------------------------------ the page
