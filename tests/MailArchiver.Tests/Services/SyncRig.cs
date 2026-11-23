@@ -90,7 +90,7 @@ internal sealed class SyncRig : IDisposable
         return (msg.Uid, m.MessageId);
     }
 
-    public sealed record RunContext(MailArchiverDbContext Ctx, ImapMailSyncService Service, MailAccount Account, DeletionMarkerService Markers, ISyncProblemService Problems, IBandwidthService BandwidthService);
+    public sealed record RunContext(MailArchiverDbContext Ctx, ImapMailSyncService Service, MailAccount Account, DeletionMarkerService Markers, ISyncProblemService Problems, IBandwidthService BandwidthService, SyncJobService? Jobs = null);
 
     public RunContext NewRun()
     {
@@ -102,14 +102,15 @@ internal sealed class SyncRig : IDisposable
         var meta = new GmailMetaService(ctx, new MutableOptionsMonitor<IntegrityOptions>(new IntegrityOptions()), Kit.Chain);
         var services = new ServiceCollection();
         services.AddSingleton(ctx);
+        var jobs = new SyncJobService(NullLogger<SyncJobService>.Instance, services.BuildServiceProvider(), Opt.Create(new MailSyncOptions()));
         var sync = new ImapMailSyncService(ctx, NullLogger<ImapMailSyncService>.Instance, wired.Svc,
-            new SyncJobService(NullLogger<SyncJobService>.Instance, services.BuildServiceProvider(), Opt.Create(new MailSyncOptions())),
+            jobs,
             bandwidth, new LocalFactory(Server.Port, ctx), new EmlMailCleaner(NullLogger<EmlMailCleaner>.Instance), new ImapFolderService(NullLogger<ImapFolderService>.Instance),
             new MailArchiver.Utilities.DateTimeHelper(Opt.Create(new TimeZoneOptions { DisplayTimeZoneId = "Europe/Berlin" })),
             Opt.Create(new BatchOperationOptions { BatchSize = BatchSize, PauseBetweenBatchesMs = 0, PauseBetweenEmailsMs = 0 }),
             Opt.Create(new MailSyncOptions()), Opt.Create(Bandwidth), problems, meta, markers);
         var account = ctx.MailAccounts.AsNoTracking().First(a => a.Id == Account.Id);
-        return new RunContext(ctx, sync, account, markers, problems, bandwidth);
+        return new RunContext(ctx, sync, account, markers, problems, bandwidth, jobs);
     }
 
     /// <summary>One scheduled sync run of the account, as the background service does it (with the stored LastSync).</summary>

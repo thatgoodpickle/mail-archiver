@@ -154,6 +154,22 @@ namespace MailArchiver.Services.Providers.Imap
                     _logger.LogError("Gmail account {AccountName} is set to sync only the folder with all mail, but the server does not show one. In Gmail, open Settings, Labels and set 'All Mail' to 'Show in IMAP' (or untick the option on the account).", account.Name);
                     failedFolders++;
                 }
+                else if (MailArchiver.Services.Shared.GmailAccount.AllMailOnly(account))
+                {
+                    // Audit finding 15: All Mail exists but the account's or the global exclusion list hides it (upstream's guide says to hide it).
+                    // Every folder would then be skipped and the sync would "succeed" with nothing archived while LastSync moved on. Fail loudly:
+                    // a visible problem on the job, a failed job, and LastSync stays where it was.
+                    var allMailFolders = allFolders.Where(f => f.Attributes.HasFlag(FolderAttributes.All)).ToList();
+                    if (allMailFolders.Count > 0 && allMailFolders.All(f => IsExcludedFolder(f, account)))
+                    {
+                        var reason = $"The folder '{allMailFolders[0].FullName}' holds all mail of this Gmail account, but it is in the list of excluded folders, so nothing would be archived. " +
+                            "Remove it from the account's excluded folders (and from MailSync:GlobalExcludedFolders), or untick 'only the folder with all mail' to sync the other folders.";
+                        _logger.LogError("Gmail account {AccountName}: {Reason}", account.Name, reason);
+                        var problem = new InvalidOperationException(reason);
+                        RecordIssue(jobId, SyncIssueKind.FolderFailed, allMailFolders[0].FullName, problem);
+                        throw problem;
+                    }
+                }
 
                 foreach (var folder in allFolders)
                 {
