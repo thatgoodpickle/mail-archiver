@@ -243,6 +243,69 @@ public class OriginalBinTests : IAsyncLifetime
         Assert.Empty(await ChainAsync("original.purged"));
     }
 
+    /// <summary>Runs a side effect while the bin records "original.binned": the window between the early checks and the delete.</summary>
+    private sealed class HookedChain : IAuditChain
+    {
+        private readonly IAuditChain _inner; private readonly Func<Task> _onBinned;
+        public HookedChain(IAuditChain inner, Func<Task> onBinned) { _inner = inner; _onBinned = onBinned; }
+        public async Task<AuditChainEntry?> AppendAsync(string kind, int? emailId = null, string? sha256 = null, object? payload = null, CancellationToken cancellationToken = default)
+        {
+            var entry = await _inner.AppendAsync(kind, emailId, sha256, payload, cancellationToken);
+            if (kind == "original.binned" && System.Text.Json.JsonSerializer.Serialize(payload).Contains("an identical copy is already in the bin")) await _onBinned();
+            return entry;
+        }
+    }
+
+    private IAuditChain RealChain() => new AuditChain(
+        new ServiceCollection().AddScoped(_ => NewContext()).BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
+        Opt.Create(new IntegrityOptions()), NullLogger<AuditChain>.Instance);
+
+    private void PlaceIdenticalCopyInBin(string sha, string rel)
+    {
+        var bin = Abs(OriginalBin.BinRel(sha));
+        Directory.CreateDirectory(Path.GetDirectoryName(bin)!);
+        File.Copy(Abs(rel), bin);
+    }
+
+    [Fact]
+    public async Task IdenticalCopyAlreadyInTheBin_LiveFileIsKept_WhenAnIngestReusesItAtTheLastMoment()
+    {
+        var (sha, rel) = await WriteOriginalAsync();
+        PlaceIdenticalCopyInBin(sha, rel);
+        var bin = NewBin(Raw(), chainOverride: new HookedChain(RealChain(), () => { File.SetLastWriteTimeUtc(Abs(rel), DateTime.UtcNow); return Task.CompletedTask; }));
+
+        var run = await bin.RunOnceAsync("test");
+
+        Assert.True(File.Exists(Abs(rel)));                       // not deleted: the 24 h guard now holds
+        Assert.Equal(0, run.Binned);
+    }
+
+    [Fact]
+    public async Task IdenticalCopyAlreadyInTheBin_LiveFileIsKept_WhenARowStartsReferringToItAtTheLastMoment()
+    {
+        var (sha, rel) = await WriteOriginalAsync();
+        PlaceIdenticalCopyInBin(sha, rel);
+        var bin = NewBin(Raw(), chainOverride: new HookedChain(RealChain(), async () => await AddEmailWithRowAsync(sha, rel)));
+
+        var run = await bin.RunOnceAsync("test");
+
+        Assert.True(File.Exists(Abs(rel)));
+        Assert.Equal(0, run.Binned);
+    }
+
+    [Fact]
+    public async Task IdenticalCopyAlreadyInTheBin_UnreferencedLiveFile_IsStillDropped()
+    {
+        var (sha, rel) = await WriteOriginalAsync();
+        PlaceIdenticalCopyInBin(sha, rel);
+
+        var run = await NewBin(Raw()).RunOnceAsync("test");
+
+        Assert.False(File.Exists(Abs(rel)));
+        Assert.True(File.Exists(Abs(OriginalBin.BinRel(sha))));
+        Assert.Equal(1, run.Binned);
+    }
+
     [Fact]
     public async Task AReferencedOriginal_Stays()
     {

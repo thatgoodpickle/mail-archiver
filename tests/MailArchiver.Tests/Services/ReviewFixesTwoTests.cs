@@ -183,6 +183,27 @@ public class IntegrityReviewTwoTests : IAsyncLifetime
         finally { await CleanupAsync(ctx, a); }
     }
 
+    [Fact]
+    public async Task CalendarOnlyEmail_BodyMustBeTheCalendarSummary_NotAnyText()
+    {
+        var ctx = NewContext(); var a = await AccountAsync(ctx);
+        try
+        {
+            var mail = Build(_ => new TextPart("calendar") { Text = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nSUMMARY:Board meeting\r\nDTSTART:20260601T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n" });
+            var id = await ArchiveAsync(ctx, a, lean: false, mail);
+            var (_, integrity) = Make(ctx, false);
+            var genuine = await integrity(null).VerifyAsync(id);
+            Assert.True(genuine.Status == IntegrityStatus.Valid, string.Join(" | ", genuine.Findings));   // the genuine summary passes
+
+            await ctx.Database.ExecuteSqlInterpolatedAsync($"UPDATE mail_archiver.\"ArchivedEmails\" SET \"IsLocked\" = false, \"Body\" = 'Wire the money to account 123' WHERE \"Id\" = {id}");
+            ctx.ChangeTracker.Clear();
+            var forged = await integrity(null).VerifyAsync(id);
+            Assert.NotEqual(IntegrityStatus.Valid, forged.Status);
+            Assert.Contains(forged.Findings, f => f.Contains("calendar summary"));
+        }
+        finally { await CleanupAsync(ctx, a); }
+    }
+
     // ---- N-05 ---------------------------------------------------------------------------------------------
 
     private async Task AppendStoredEntryAsync()
@@ -230,26 +251,91 @@ public class IntegrityReviewTwoTests : IAsyncLifetime
 
     // ---- N-09 ---------------------------------------------------------------------------------------------
 
+    private async Task<List<int>> ArchiveManyAsync(MailArchiverDbContext ctx, MailAccount a, int n)
+    {
+        var (svc, _) = Make(ctx, false);
+        for (var i = 0; i < n; i++)
+        {
+            // January and June dates: a zone change then differs by two offsets (daylight saving).
+            var date = new DateTimeOffset(2026, i % 2 == 0 ? 1 : 6, 1 + i, 12, 0, 0, TimeSpan.Zero);
+            var mail = Build(TextAndPdf, date);
+            Assert.True(await svc.ArchiveEmailAsync(a, mail.Message, false, "INBOX", new RawMessageCapture(mail.Bytes, RawMessageSource.Imap)));
+        }
+        ctx.ChangeTracker.Clear();
+        return await ctx.ArchivedEmails.Where(e => e.MailAccountId == a.Id).OrderBy(e => e.Id).Select(e => e.Id).ToListAsync();
+    }
+
+    private Task ShiftAsync(MailArchiverDbContext ctx, int id, string interval) =>
+        ctx.Database.ExecuteSqlRawAsync($"UPDATE mail_archiver.\"ArchivedEmails\" SET \"SentDate\" = \"SentDate\" + interval '{interval}' WHERE \"Id\" = {id}");
+
     [Fact]
-    public async Task ChangingTheDisplayTimeZone_IsNotAFinding_ButARealDateChangeIs()
+    public async Task ChangingTheDisplayTimeZone_OfTheWholeArchive_IsNotAFinding()
     {
         var ctx = NewContext(); var a = await AccountAsync(ctx);
         try
         {
-            var id = await ArchiveAsync(ctx, a, lean: false, Build(TextAndPdf));          // archived under Europe/Berlin
+            var ids = await ArchiveManyAsync(ctx, a, 12);                                   // archived under Europe/Berlin
             var (_, integrity) = Make(ctx, false);
+            Assert.All(ids, id => Assert.Equal(IntegrityStatus.Valid, integrity(Zone("Europe/Berlin")).VerifyAsync(id).Result.Status));
 
-            Assert.Equal(IntegrityStatus.Valid, (await integrity(Zone("Europe/Berlin")).VerifyAsync(id)).Status);
-            var moved = await integrity(Zone("UTC")).VerifyAsync(id);                      // the zone setting changed afterwards
-            Assert.Equal(IntegrityStatus.Valid, moved.Status);
-            Assert.Contains(moved.NotCompared, n => n.Contains("time-zone"));
-
-            await ctx.Database.ExecuteSqlInterpolatedAsync($"UPDATE mail_archiver.\"ArchivedEmails\" SET \"SentDate\" = \"SentDate\" + interval '7 minutes' WHERE \"Id\" = {id}");
-            ctx.ChangeTracker.Clear();
-            var forged = await integrity(Zone("Europe/Berlin")).VerifyAsync(id);
-            Assert.NotEqual(IntegrityStatus.Valid, forged.Status);                          // not a whole offset
+            var svc = integrity(Zone("UTC"));                                                // the zone setting changed afterwards
+            foreach (var id in ids)
+            {
+                var moved = await svc.VerifyAsync(id);
+                Assert.Equal(IntegrityStatus.Valid, moved.Status);
+                Assert.Contains(moved.NotCompared, n => n.Contains("time-zone"));
+            }
         }
         finally { await CleanupAsync(ctx, a); }
+    }
+
+    [Theory]
+    [InlineData("1 hour")]
+    [InlineData("24 hours")]
+    [InlineData("25 hours 45 minutes")]
+    [InlineData("7 minutes")]
+    public async Task ASingleShiftedSentDate_IsAFinding_EvenWhenItIsAWholeQuarterHour(string interval)
+    {
+        var ctx = NewContext(); var a = await AccountAsync(ctx);
+        try
+        {
+            var ids = await ArchiveManyAsync(ctx, a, 12);
+            var (_, integrity) = Make(ctx, false);
+            await ShiftAsync(ctx, ids[3], interval);
+            ctx.ChangeTracker.Clear();
+
+            var forged = await integrity(Zone("Europe/Berlin")).VerifyAsync(ids[3]);
+            Assert.NotEqual(IntegrityStatus.Valid, forged.Status);
+            Assert.Contains(forged.Findings, f => f.Contains("sent date"));
+            Assert.Equal(IntegrityStatus.Valid, (await integrity(Zone("Europe/Berlin")).VerifyAsync(ids[4])).Status);
+        }
+        finally { await CleanupAsync(ctx, a); }
+    }
+
+    [Fact]
+    public async Task AForgedRow_AfterARealZoneChange_IsStillAFinding_AndSoIsAnArchiveTooSmallToTell()
+    {
+        var ctx = NewContext(); var a = await AccountAsync(ctx);
+        try
+        {
+            var ids = await ArchiveManyAsync(ctx, a, 12);
+            var (_, integrity) = Make(ctx, false);
+            await ShiftAsync(ctx, ids[5], "3 hours");                                       // forged, on top of the zone change below
+            ctx.ChangeTracker.Clear();
+            var svc = integrity(Zone("UTC"));
+            Assert.NotEqual(IntegrityStatus.Valid, (await svc.VerifyAsync(ids[5])).Status);
+            Assert.Equal(IntegrityStatus.Valid, (await svc.VerifyAsync(ids[6])).Status);
+        }
+        finally { await CleanupAsync(ctx, a); }
+
+        var ctx2 = NewContext(); var a2 = await AccountAsync(ctx2);
+        try
+        {
+            var only = await ArchiveManyAsync(ctx2, a2, 1);                                 // one row: nothing to compare against
+            var (_, integrity) = Make(ctx2, false);
+            Assert.NotEqual(IntegrityStatus.Valid, (await integrity(Zone("UTC")).VerifyAsync(only[0])).Status);
+        }
+        finally { await CleanupAsync(ctx2, a2); }
     }
 
     // ---- N-13 ---------------------------------------------------------------------------------------------

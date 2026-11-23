@@ -240,7 +240,7 @@ namespace MailArchiver.Services.Shared
             if (string.Equals(row.Source, RawMessageSource.Serialized, StringComparison.Ordinal))
                 notCompared.Add("The stored original is a re-serialized copy (source: serialized), not the bytes the server delivered.");
             var fromMessage = !string.Equals(row.Source, RawMessageSource.Graph, StringComparison.Ordinal);
-            CompareFields(e, message, fromMessage, findings, notCompared);
+            await CompareFieldsAsync(emailId, e, message, fromMessage, findings, notCompared, cancellationToken);
             await CompareAttachmentsAsync(emailId, message, row.Source, fromMessage, findings, notCompared, cancellationToken);
 
             return Finish(emailId, row.Sha256, row.Source, row.StorageType, e.ContentStripped, findings, chainState, notCompared);
@@ -276,7 +276,67 @@ namespace MailArchiver.Services.Shared
             return new IntegrityReport(emailId, status, sha, source, storage, lean, findings, chainState, notCompared);
         }
 
-        private void CompareFields(EmailRow e, MimeMessage message, bool fromMessage, List<string> findings, List<string> notCompared)
+        // ---- N-09 archive-wide comparison -------------------------------------------------------------------
+        private const int ZoneSampleSize = 40;
+        private const int ZoneMinSample = 8;
+        private const double ZoneShiftedShare = 0.75;   // a zone change moves (nearly) every row
+        private const double ZoneOffsetShare = 0.20;    // DST can split the rows over two offsets, each must be a real share
+
+        private List<(int Id, TimeSpan Diff)>? _zoneSample;
+
+        private static bool IsQuarterHourShift(TimeSpan diff)
+        {
+            var quarterHours = diff.TotalMinutes / 15.0;
+            return Math.Abs(diff.TotalHours) <= 26 && Math.Abs(quarterHours - Math.Round(quarterHours)) * 15 * 60 <= DateToleranceSeconds;
+        }
+
+        private static long OffsetKey(TimeSpan diff) => (long)Math.Round(diff.TotalMinutes / 15.0);
+
+        /// <summary>
+        /// True when this row's date difference is the same time-zone shift that the rest of the archive shows: from a sample of
+        /// other rows (read once per service instance, only when a shifted row is met), at least 75 % are shifted by a quarter-hour
+        /// multiple and at least 20 % have exactly this offset. A single forged row, or too small an archive to tell, is not forgiven.
+        /// </summary>
+        private async Task<bool> ArchiveWideShiftAsync(int emailId, TimeSpan diff, CancellationToken ct)
+        {
+            _zoneSample ??= await LoadZoneSampleAsync(ct);
+            var others = _zoneSample.Where(x => x.Id != emailId).ToList();
+            if (others.Count < ZoneMinSample) return false;
+            var shifted = others.Count(x => Math.Abs(x.Diff.TotalSeconds) > DateToleranceSeconds && IsQuarterHourShift(x.Diff));
+            if (shifted < others.Count * ZoneShiftedShare) return false;
+            var key = OffsetKey(diff);
+            var same = others.Count(x => Math.Abs(x.Diff.TotalSeconds) > DateToleranceSeconds && IsQuarterHourShift(x.Diff) && OffsetKey(x.Diff) == key);
+            return same >= others.Count * ZoneOffsetShare;
+        }
+
+        private async Task<List<(int Id, TimeSpan Diff)>> LoadZoneSampleAsync(CancellationToken ct)
+        {
+            var result = new List<(int, TimeSpan)>();
+            var count = await _context.ArchivedEmails.AsNoTracking().CountAsync(ct);
+            if (count == 0) return result;
+            var step = Math.Max(1, count / (ZoneSampleSize + 5));
+            var rows = await _context.ArchivedEmails.AsNoTracking()
+                .Where(x => x.Id % step == 0 && _context.RawMessages.Any(r => r.ArchivedEmailId == x.Id && r.Source != RawMessageSource.Graph))
+                .OrderBy(x => x.Id).Select(x => new { x.Id, x.SentDate }).Take(ZoneSampleSize + 5)
+                .ToListAsync(ct);
+            foreach (var r in rows)
+            {
+                try
+                {
+                    var content = await _store.ReadAsync(r.Id);
+                    if (content == null) continue;
+                    using var ms = new MemoryStream(content.Bytes, writable: false);
+                    var msg = await MimeMessage.LoadAsync(ParserOptions.Default, ms, ct);
+                    var expected = _dateTimeHelper!.ConvertToDisplayTimeZone(MailContentHelper.ExtractEmailDate(msg.Date, msg.Headers));
+                    result.Add((r.Id, r.SentDate - expected));
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* an unreadable sample row simply does not vote */ }
+            }
+            return result;
+        }
+
+        private async Task CompareFieldsAsync(int emailId, EmailRow e, MimeMessage message, bool fromMessage, List<string> findings, List<string> notCompared, CancellationToken ct)
         {
             // Same derivation as EmailCoreService.ArchiveEmailAsync (shared in LeanIndexFields, which the
             // import and Graph lean paths also use to fill the index fields from the original).
@@ -299,10 +359,24 @@ namespace MailArchiver.Services.Shared
                 }
                 else notCompared.Add("Text body (over 100 KB, stored truncated)");
             }
-            else if (!string.IsNullOrWhiteSpace(e.Body) && CalendarContentHelper.TryExtractCalendar(message) == null)
+            else if (!string.IsNullOrWhiteSpace(e.Body))
             {
-                // N-13: the original has no text, so the database copy must not show any (a synthesized calendar summary is the one exception).
-                findings.Add("The stored text body has content, but the original has no text body.");
+                var calendar = CalendarContentHelper.TryExtractCalendar(message);
+                if (calendar == null)
+                {
+                    // N-13: the original has no text, so the database copy must not show any.
+                    findings.Add("The stored text body has content, but the original has no text body.");
+                }
+                else
+                {
+                    // Audit finding 16: the one exception is the summary ingest synthesizes from the calendar part; the stored body must be exactly that.
+                    var summary = CalendarContentHelper.ParseICalSummary(calendar.Content);
+                    if (Encoding.UTF8.GetByteCount(summary) >= MaxComparedBodyBytes)
+                        notCompared.Add("Text body (calendar summary over 100 KB, stored truncated)");
+                    else if (!string.Equals(e.Body, summary, StringComparison.Ordinal)
+                        && !string.Equals(e.Body, MailContentHelper.SanitizeLongTokens(summary) ?? string.Empty, StringComparison.Ordinal))
+                        findings.Add("The stored text body differs from the calendar summary of the original.");
+                }
             }
 
             // Lean rows keep no HTML body and no copy of the bodies: they are rebuilt from the original on every read.
@@ -327,13 +401,13 @@ namespace MailArchiver.Services.Shared
                 var diff = e.SentDate - expectedDate;
                 if (Math.Abs(diff.TotalSeconds) > DateToleranceSeconds)
                 {
-                    // N-09: the stored date was converted with the display time zone of the day it was archived. If the zone setting (or
-                    // tzdata) changed since, the whole archive differs by a time-zone offset: a whole number of quarter hours, within two
-                    // zones' range. That is not a finding (it would bury real ones); it is noted. Any other difference is.
-                    var quarterHours = diff.TotalMinutes / 15.0;
-                    var isZoneShift = Math.Abs(diff.TotalHours) <= 26 && Math.Abs(quarterHours - Math.Round(quarterHours)) * 15 * 60 <= DateToleranceSeconds;
+                    // N-09 (audit finding 5): the stored date was converted with the display time zone of the day it was archived. If the
+                    // zone setting (or tzdata) changed since, EVERY row differs by a time-zone offset. So a difference is forgiven only when
+                    // it is a whole number of quarter hours within two zones' range AND the rest of the archive shows the same shift
+                    // (see ArchiveWideShiftAsync). One row that differs alone is a finding, however round the difference is.
+                    var isZoneShift = IsQuarterHourShift(diff) && await ArchiveWideShiftAsync(emailId, diff, ct);
                     if (isZoneShift)
-                        notCompared.Add("Sent date (differs from the original only by a time-zone offset: the display time zone was probably changed after archiving)");
+                        notCompared.Add("Sent date (differs from the original only by a time-zone offset that the whole archive shows: the display time zone was probably changed after archiving)");
                     else
                         findings.Add("The sent date differs from the original.");
                 }
@@ -363,7 +437,11 @@ namespace MailArchiver.Services.Shared
                 var rawText = message.TextBody;
                 if (e.OriginalBodyHtml != null && !MatchesAny(e.OriginalBodyHtml, rawHtml))
                     findings.Add("The stored original-HTML copy differs from the original.");
-                if (e.OriginalBodyText != null && !MatchesAny(e.OriginalBodyText, rawText, rawHtml))
+                // A calendar-only email: ingest stores the synthesized summary as the original text copy too (audit finding 16).
+                string? calendarSummary = null;
+                if (string.IsNullOrEmpty(rawText) && string.IsNullOrEmpty(rawHtml) && CalendarContentHelper.TryExtractCalendar(message) is { } cal)
+                    calendarSummary = CalendarContentHelper.ParseICalSummary(cal.Content);
+                if (e.OriginalBodyText != null && !MatchesAny(e.OriginalBodyText, rawText, rawHtml, calendarSummary))
                     findings.Add("The stored original-text copy differs from the original.");
             }
         }

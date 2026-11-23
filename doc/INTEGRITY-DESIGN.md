@@ -335,7 +335,10 @@ Second review (REVIEW-opus2-2026-11-22.md); REVIEW-fixes-status-2.md has one row
 - **What "Valid" covers now (N-04, N-05, N-09, N-13).** Calendar-typed attachment rows are compared (a synthesized `.ics` is accepted only when it can be
   re-derived from the original, once); an email archived after the chain began without a chain entry is `ChainMismatch` (state `Gap`), not
   Valid (emails from before the chain stay *Unchained*); a changed display time zone shifts every stored date by a whole offset, which is noted
-  and not a finding (any other date difference is); a body on an email whose original has no text is a finding.
+  and not a finding only when the rest of the archive shows the same shift (a sample of up to 40 other rows: at least 75 % shifted by a
+  quarter-hour multiple, at least 20 % by this row's offset; fewer than 8 readable sample rows forgives nothing). A single row whose date
+  differs, by any amount, is a finding (audit finding 5). Limit: a forger who shifts most of the archive by the same offset is not told apart from a zone change;
+  the offset used at ingest is not stored (that would need a migration); a body on an email whose original has no text is a finding.
 - **Settings and keys (N-10, N-14, N-18, N-19).** A reset goes to the configured value (appsettings/environment without the database
   overlay) and asks for the password when that lowers a protection; an old signing key beside the manifests is moved once to the key directory (0600,
   chained `key.relocated`); a GET never writes an audit record; wrong passwords are counted per account and per address (twice the budget)

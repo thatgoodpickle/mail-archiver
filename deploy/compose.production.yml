@@ -8,13 +8,21 @@
 #
 # The image is pinned to ONE commit (sha-xxxxxxx), never a moving tag, so an upgrade is a deliberate edit of this line
 # after a backup. Secrets come from .env (the stack refuses to start without them); nothing secret is in this file.
+#
+# Digest pins (optional, recommended): a registry tag can be pushed again, a digest cannot. Put the digests in .env, as the guide
+# shows (section 2), for example  APP_DIGEST=@sha256:<64 hex>  and  POSTGRES_DIGEST=@sha256:<64 hex>. Empty = tag only.
+# Fetch a digest yourself:  docker buildx imagetools inspect <image:tag> --format '{{.Manifest.Digest}}'
+#
+# Network: Docker publishes ports through its own iptables rules, which BYPASS ufw. A "ufw allow from <LAN>" rule does NOT limit a
+# published port. The real control is BIND_ADDR below (publish only on the VM's LAN address). Further limits belong on the router or
+# VLAN, or in the DOCKER-USER iptables chain (see the guide).
 
 services:
   mailarchiver:
-    image: ghcr.io/thatgoodpickle/mailarchiver:sha-741adab   # pin: change deliberately, see "Upgrades" in the guide
+    image: ghcr.io/thatgoodpickle/mailarchiver:sha-741adab${APP_DIGEST:-}   # pin: change deliberately, see "Upgrades" in the guide
     restart: unless-stopped
     ports:
-      - "${BIND_ADDR:?set BIND_ADDR to the VM's LAN address}:${APP_PORT:-5555}:5000"   # internal only: never 0.0.0.0 unless the firewall limits it
+      - "${BIND_ADDR:?set BIND_ADDR to the VM's LAN address}:${APP_PORT:-5555}:5000"   # internal only: BIND_ADDR is the control (ufw does not see Docker ports); never 0.0.0.0
     environment:
       ConnectionStrings__DefaultConnection: "Host=postgres;Database=MailArchiver;Username=mailuser;Password=${DB_PASSWORD:?set DB_PASSWORD}"
       # First login uses this bootstrap password and is forced to choose a new one. Keep the new one in a password manager.
@@ -50,7 +58,7 @@ services:
         condition: service_healthy
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine${POSTGRES_DIGEST:-}
     restart: unless-stopped
     environment:
       POSTGRES_DB: MailArchiver

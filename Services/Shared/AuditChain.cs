@@ -7,6 +7,7 @@ using MailArchiver.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace MailArchiver.Services.Shared
 {
@@ -44,11 +45,33 @@ namespace MailArchiver.Services.Shared
         private readonly IOptions<IntegrityOptions> _options;
         private readonly ILogger<AuditChain> _logger;
 
-        public AuditChain(IServiceScopeFactory scopes, IOptions<IntegrityOptions> options, ILogger<AuditChain> logger)
+        // Audit finding 20: a long delete batch holds the chain lock through its trigger until it commits. An append that waits for the lock
+        // longer than the lock timeout is retried with a growing pause instead of being given up on at the first timeout.
+        private static readonly TimeSpan[] DefaultRetryDelays = { TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5) };
+        private readonly int _lockTimeoutSeconds;
+        private readonly TimeSpan[] _retryDelays;
+
+        public AuditChain(IServiceScopeFactory scopes, IOptions<IntegrityOptions> options, ILogger<AuditChain> logger,
+            int lockTimeoutSeconds = 10, TimeSpan[]? retryDelays = null)
         {
             _scopes = scopes;
             _options = options;
             _logger = logger;
+            _lockTimeoutSeconds = lockTimeoutSeconds;
+            _retryDelays = retryDelays ?? DefaultRetryDelays;
+        }
+
+        /// <summary>Lock timeout, deadlock, serialization failure or a transient connection error: worth another try.</summary>
+        private static bool IsRetryable(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException!)
+            {
+                if (e is PostgresException pg && (pg.SqlState == PostgresErrorCodes.LockNotAvailable || pg.SqlState == PostgresErrorCodes.DeadlockDetected
+                    || pg.SqlState == PostgresErrorCodes.SerializationFailure)) return true;
+                if (e is NpgsqlException { IsTransient: true }) return true;
+                if (e.InnerException == null) break;
+            }
+            return false;
         }
 
         public async Task<AuditChainEntry?> AppendAsync(string kind, int? emailId = null, string? sha256 = null,
@@ -61,14 +84,38 @@ namespace MailArchiver.Services.Shared
             if (kind.Contains('|') || (sha256 != null && sha256.Contains('|')))
                 throw new ArgumentException("Audit chain kind and hash must not contain '|'.");
 
-            try
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    return await AppendOnceAsync(kind, emailId, sha256, payload, cancellationToken);
+                }
+                catch (Exception ex) when (attempt < _retryDelays.Length && IsRetryable(ex))
+                {
+                    _logger.LogWarning("Audit chain append for '{Kind}' (email {EmailId}) could not get its turn ({Reason}); retry {Attempt} of {Max}.",
+                        kind, emailId, ex.GetBaseException().Message, attempt + 1, _retryDelays.Length);
+                    await Task.Delay(_retryDelays[attempt]);
+                }
+                catch (Exception ex)
+                {
+                    // Never silent: counted (shown by the integrity API), logged, and the caller gets null instead of an entry.
+                    Interlocked.Increment(ref _failedAppends);
+                    _logger.LogError(ex, "Audit chain append failed for '{Kind}' (email {EmailId}); the action itself was not blocked. " +
+                        "The audit trail now has a gap for it (GET api/v1/integrity/chain/head shows the failure count).", kind, emailId);
+                    return null;
+                }
+            }
+        }
+
+        private async Task<AuditChainEntry?> AppendOnceAsync(string kind, int? emailId, string? sha256, object? payload, CancellationToken cancellationToken)
+        {
             {
                 // Own scope and context: callers may be inside a SaveChanges or a transaction of their own.
                 using var scope = _scopes.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<MailArchiverDbContext>();
                 await using var tx = await db.Database.BeginTransactionAsync(cancellationToken);
                 // F-20: never wait for the chain lock forever (a stuck session would stall every audited action).
-                await db.Database.ExecuteSqlRawAsync("SET LOCAL lock_timeout = '10s'", cancellationToken);
+                await db.Database.ExecuteSqlRawAsync($"SET LOCAL lock_timeout = '{_lockTimeoutSeconds}s'", cancellationToken);
                 await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock({LockKey})", cancellationToken);
 
                 var last = await db.AuditChain.AsNoTracking().OrderByDescending(e => e.Seq).FirstOrDefaultAsync(cancellationToken);
@@ -88,13 +135,6 @@ namespace MailArchiver.Services.Shared
                 await db.SaveChangesAsync(cancellationToken);
                 await tx.CommitAsync(cancellationToken);
                 return entry;
-            }
-            catch (Exception ex)
-            {
-                Interlocked.Increment(ref _failedAppends);
-                _logger.LogError(ex, "Audit chain append failed for '{Kind}' (email {EmailId}); the action itself was not blocked. " +
-                    "The audit trail now has a gap for it (GET api/v1/integrity/chain/head shows the failure count).", kind, emailId);
-                return null;
             }
         }
 
