@@ -60,6 +60,8 @@ namespace MailArchiver.Models.ViewModels
 
         [Display(Name = "Gmail search filter")]
         [StringLength(500)]
+        // An EMPTY field means "no filter, archive everything"; it must not be turned into null ("never set = the default").
+        [DisplayFormat(ConvertEmptyStringToNull = false)]
         public string? GmailSearchFilter { get; set; }
 
         [Display(Name = "Gmail: sync only the folder with all mail")]

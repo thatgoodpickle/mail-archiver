@@ -164,9 +164,10 @@
                             <label asp-for="GmailSearchFilter" class="form-label">Gmail search filter</label>
                             <input asp-for="GmailSearchFilter" class="form-control" id="GmailSearchFilter" placeholder="-label:Marketing" autocomplete="off" />
                             <div class="form-text">
-                                Only for Gmail accounts. Mail that matches this Gmail search is <strong>not archived</strong>. It is never downloaded. The default
-                                <code>-label:Marketing</code> skips everything you tag <em>Marketing</em> in Gmail, including its sub-labels (Gmail's search treats a
-                                parent label as including its sub-labels; check this with one test message). Leave it empty to archive everything.
+                                Only for Gmail accounts. This is a Gmail search for the mail you want to <strong>keep (archive)</strong>: only mail that matches it is archived,
+                                everything else is never downloaded. The default <code>-label:Marketing</code> means "everything except mail tagged <em>Marketing</em>"
+                                (including its sub-labels: Gmail's search treats a parent label as including its sub-labels; check this with one test message).
+                                Typing <code>label:Marketing</code> would archive <em>only</em> Marketing mail. Leave the field empty for <strong>no filter: archive everything</strong>.
                                 Changes are recorded in the audit chain.
                             </div>
                             <div class="d-flex flex-wrap gap-2 align-items-center mt-2">

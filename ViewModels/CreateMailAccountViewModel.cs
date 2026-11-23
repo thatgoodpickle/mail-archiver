@@ -39,7 +39,10 @@ namespace MailArchiver.Models.ViewModels
         /// <summary>Fork: Gmail search applied to the sync (for example -label:Marketing). Blank = no filter; ignored for non-Gmail servers.</summary>
         [System.ComponentModel.DataAnnotations.Display(Name = "Gmail search filter")]
         [System.ComponentModel.DataAnnotations.StringLength(500)]
-        public string? GmailSearchFilter { get; set; }
+        // An EMPTY field is a choice ("no filter, archive everything") and must stay empty, not become null (= "never set = the default").
+        // The new-account form starts with the default filled in, so leaving it alone keeps the default.
+        [System.ComponentModel.DataAnnotations.DisplayFormat(ConvertEmptyStringToNull = false)]
+        public string? GmailSearchFilter { get; set; } = MailArchiver.Services.Shared.GmailAccount.DefaultFilter;
 
         [System.ComponentModel.DataAnnotations.Display(Name = "Gmail: sync only the folder with all mail")]
         public bool GmailAllMailOnly { get; set; } = true;

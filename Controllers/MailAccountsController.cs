@@ -108,7 +108,7 @@ namespace MailArchiver.Controllers
     private readonly MailArchiver.Services.Shared.IAuditChain? _auditChain;
 
     /// <summary>The Gmail search filter as stored: only Gmail IMAP accounts have one; blank means "no filter", null the default.</summary>
-    private static string? FilterToStore(ProviderType provider, string? server, string? posted)
+    internal static string? FilterToStore(ProviderType provider, string? server, string? posted)
     {
         if (provider != ProviderType.IMAP || !MailArchiver.Services.Shared.GmailAccount.Is(new MailAccount { ImapServer = server })) return null;
         return posted == null ? null : posted.Trim();
@@ -126,6 +126,10 @@ namespace MailArchiver.Controllers
             new { accountId = account.Id, account = account.Name, old = was, @new = now, actor = authService?.GetCurrentUserDisplayName(HttpContext), confirmedLargeSkip });
     }
 
+    /// <summary>The filter the Test button posted: absent = the default filter, present (even empty) = exactly what was typed.</summary>
+    internal static string FilterPosted(Microsoft.AspNetCore.Http.HttpRequest request) =>
+        request.HasFormContentType && request.Form.TryGetValue("filter", out var v) ? v.ToString() : MailArchiver.Services.Shared.GmailAccount.DefaultFilter;
+
     /// <summary>Tries a Gmail search filter against the account's mailbox: counts only.</summary>
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> TestGmailFilter(int id, string? filter)
@@ -133,7 +137,8 @@ namespace MailArchiver.Controllers
         var account = await _context.MailAccounts.FindAsync(id);
         if (account == null) return NotFound();
         if (_imapSync == null) return Json(new { ok = false, message = "Not available." });
-        var r = await _imapSync.TestGmailFilterAsync(account, filter ?? string.Empty);
+        // The posted field is read raw: MVC would turn an empty value into null, and null here means "the default", not "no filter".
+        var r = await _imapSync.TestGmailFilterAsync(account, FilterPosted(Request));
         return Json(new { ok = r.Ok, message = r.Message, total = r.Total, matching = r.Matching, skipped = r.Skipped });
     }
 
