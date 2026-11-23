@@ -12,6 +12,9 @@ namespace MailArchiver.Models
         public int TotalFolders { get; set; }
         public int ProcessedEmails { get; set; }
         public int NewEmails { get; set; }
+
+        /// <summary>Delete memory: messages not archived because they were deleted on purpose earlier (a marker matched). Shown as "Skipped, deleted by you".</summary>
+        public int SkippedDeletedEmails { get; set; }
         public int FailedEmails { get; set; }
 
         /// <summary>

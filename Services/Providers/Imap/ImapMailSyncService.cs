@@ -33,6 +33,7 @@ namespace MailArchiver.Services.Providers.Imap
         private readonly BandwidthTrackingOptions _bandwidthOptions;
         private readonly MailArchiver.Services.Shared.ISyncProblemService? _problems;
         private readonly MailArchiver.Services.Shared.IGmailMetaService? _gmailMeta;
+        private readonly MailArchiver.Services.Shared.IDeletionMarkerService? _markers;
 
         public ImapMailSyncService(
             MailArchiverDbContext context,
@@ -48,8 +49,10 @@ namespace MailArchiver.Services.Providers.Imap
             IOptions<MailSyncOptions> mailSyncOptions,
             IOptions<BandwidthTrackingOptions> bandwidthOptions,
             MailArchiver.Services.Shared.ISyncProblemService? problems = null,
-            MailArchiver.Services.Shared.IGmailMetaService? gmailMeta = null)
+            MailArchiver.Services.Shared.IGmailMetaService? gmailMeta = null,
+            MailArchiver.Services.Shared.IDeletionMarkerService? markers = null)
         {
+            _markers = markers;
             _problems = problems;
             _gmailMeta = gmailMeta;
             _context = context;
@@ -116,6 +119,7 @@ namespace MailArchiver.Services.Providers.Imap
             var newEmails = 0;
             var failedEmails = 0;
             var quarantinedEmails = 0;
+            var skippedDeletedEmails = 0;
             var failedFolders = 0;
             var missingFolders = 0;
             var recoveredEmails = 0;
@@ -205,6 +209,7 @@ namespace MailArchiver.Services.Providers.Imap
                         newEmails += folderResult.NewEmails;
                         failedEmails += folderResult.FailedEmails;
                         quarantinedEmails += folderResult.QuarantinedEmails;
+                        skippedDeletedEmails += folderResult.SkippedDeletedEmails;
                         failedFolders += folderResult.FailedFolders;
                         missingFolders += folderResult.MissingFolders;
                         recoveredEmails += folderResult.RecoveredEmails;
@@ -248,6 +253,7 @@ namespace MailArchiver.Services.Providers.Imap
                                 job.ProcessedFolders = processedFolders;
                                 job.ProcessedEmails = processedEmails;
                                 job.NewEmails = newEmails;
+                                job.SkippedDeletedEmails = skippedDeletedEmails;
                                 job.FailedEmails = failedEmails;
                                 job.FailedFolders = failedFolders;
                                 job.MissingFolders = missingFolders;
@@ -367,6 +373,9 @@ namespace MailArchiver.Services.Providers.Imap
                     "Failed folders: {FailedFolders}, Missing folders: {MissingFolders}",
                     account.Name, newEmails, failedEmails, deletedEmails, recoveredEmails, providerPlaceholderEmails,
                     failedFolders, missingFolders);
+                if (skippedDeletedEmails > 0)
+                    _logger.LogInformation("Skipped, deleted by you: {Count} messages of account {AccountName} were not archived again because you deleted them earlier. They are listed on the account page, where each can be allowed again.",
+                        skippedDeletedEmails, account.Name);
                 if (quarantinedEmails > 0)
                     _logger.LogWarning("Account {AccountName} is NOT completely archived: {Count} messages are quarantined (they failed repeatedly). They are listed on the Integrity & Storage page, where an administrator can retry them.",
                         account.Name, quarantinedEmails);
@@ -849,6 +858,53 @@ namespace MailArchiver.Services.Providers.Imap
             return (skip, meta);
         }
 
+        /// <summary>
+        /// Delete memory, check 1 of 2 (before the download): which messages of the batch match a deletion marker of this account.
+        /// FAIL CLOSED and deliberately NOT part of <see cref="PreSkipKnownAsync"/>, whose try/catch fails open: here a database error, a
+        /// failed summary fetch or a message the server did not describe makes the affected messages FAIL (they are counted as sync
+        /// problems and never imported). Returns without doing anything when the account has no markers.
+        /// </summary>
+        private async Task<MarkerBatchCheck> CheckMarkersForBatchAsync(IMailFolder folder, MailAccount account, IList<UniqueId> batch, ImapClient client, CancellationToken cancellationToken)
+        {
+            var check = await MarkerBatchCheck.RunAsync(_markers, account.Id, MailArchiver.Services.Shared.GmailAccount.Is(account),
+                MailContentHelper.CleanText(folder.FullName ?? string.Empty), batch.Count,
+                async () =>
+                {
+                    var gmailExt = MailArchiver.Services.Shared.GmailAccount.Is(account) && client.Capabilities.HasFlag(ImapCapabilities.GMailExt1);
+                    var items = MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.Size;
+                    if (gmailExt) items |= MessageSummaryItems.GMailMessageId;
+                    var summaries = await folder.FetchAsync(batch, items, cancellationToken);
+                    return (IReadOnlyList<MarkerProbe>)summaries.Select(s => new MarkerProbe(s.UniqueId.Id, s.GMailMessageId?.ToString(), s.Envelope?.MessageId, s.Size,
+                        (s.Envelope?.Date ?? s.InternalDate ?? DateTimeOffset.UtcNow).DateTime)).ToList();
+                }, cancellationToken);
+            if (check.Error != null)
+                _logger.LogError(check.Error, "The deletion-marker check of folder {FolderName} (account {AccountName}) could not be done; the messages of this batch are NOT imported and count as sync problems",
+                    folder.FullName, account.Name);
+            return check;
+        }
+
+        /// <summary>
+        /// A message that matched a deletion marker is not archived. It counts as processed and as "skipped, deleted by you", clears its
+        /// problem record and moves the checkpoint on (like an already archived message). Logs identifiers only, never subject or sender.
+        /// </summary>
+        private async Task SkipDeletedByUserAsync(MailAccount account, IMailFolder folder, uint uid, IReadOnlyDictionary<long, SyncProblemMessage> problems,
+            DeletedMessageMarker marker, DateTime date, string? messageId, SyncFolderResult result, bool moveCheckpoint, CancellationToken cancellationToken)
+        {
+            result.ProcessedEmails++;
+            result.SkippedDeletedEmails++;
+            _logger.LogInformation("Skipped UID {Uid} in folder {FolderName} of account {AccountName}: it was deleted by you earlier (marker {MarkerId}, chain entry {ChainSeq}); use Allow again on the account page to archive it again",
+                uid, folder.FullName, account.Name, marker.Id, marker.ChainSeq);
+            if (problems.ContainsKey(uid) && _problems != null)
+            {
+                try { await _problems.ResolveAsync(account.Id, folder.FullName, folder.UidValidity, uid, cancellationToken); } catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+            }
+            if (moveCheckpoint)
+            {
+                try { await _bandwidthService.UpdateCheckpointAsync(account.Id, folder.FullName, date, messageId ?? string.Empty, 0, uid, folder.UidValidity); }
+                catch (Exception cpEx) { _logger.LogWarning(cpEx, "Error updating checkpoint"); }
+            }
+        }
+
         private async Task<SyncFolderResult> SyncFolderAsync(IMailFolder folder, MailAccount account, ImapClient client, string? jobId = null, CancellationToken cancellationToken = default)
         {
             var result = new SyncFolderResult();
@@ -1085,6 +1141,9 @@ namespace MailArchiver.Services.Providers.Imap
                         // an email we already hold (in this folder, or anywhere for Gmail) is not downloaded again.
                         var (preSkip, batchMeta) = await PreSkipKnownAsync(folder, account, batch, client, cancellationToken);
 
+                        // Delete memory (fail closed, separate from the pre-check above): messages that were deleted on purpose are not downloaded.
+                        var markerBatch = await CheckMarkersForBatchAsync(folder, account, batch, client, cancellationToken);
+
                         foreach (var uid in batch)
                         {
                             var messageStopReason = SyncInterruption.Evaluate(
@@ -1120,6 +1179,15 @@ namespace MailArchiver.Services.Providers.Imap
                                         }
                                         catch (Exception cpEx) { _logger.LogWarning(cpEx, "Error updating checkpoint"); }
                                     }
+                                    continue;
+                                }
+
+                                // Delete memory, check 1: a message deleted on purpose is skipped. A check that could not be made throws:
+                                // the failure handling below counts it as a sync problem and the message is never imported.
+                                markerBatch.ThrowIfUnchecked(uid.Id);
+                                if (markerBatch.Hits.TryGetValue(uid.Id, out var markerHit))
+                                {
+                                    await SkipDeletedByUserAsync(account, folder, uid.Id, problems, markerHit.Marker, markerHit.Date, markerHit.MessageId, result, !watermarkFrozen, cancellationToken);
                                     continue;
                                 }
 
@@ -1439,6 +1507,21 @@ namespace MailArchiver.Services.Providers.Imap
                                     catch (Exception bwEx)
                                     {
                                         _logger.LogWarning(bwEx, "Error tracking bandwidth usage");
+                                    }
+                                }
+
+                                // Delete memory, check 2 (the real backstop, after the download): the SHA-256 of the downloaded original against the
+                                // markers. This is its OWN code path: not inside the pre-check's try/catch (which fails open) and not skipped when
+                                // raw messages are not stored by that pre-check. A database error here propagates to the failure handling below
+                                // (the message is counted as a sync problem), it never lets the message through. Without a captured original (raw
+                                // storage off) there is nothing to hash and only check 1 applies.
+                                if (_markers != null && rawMessage != null && rawMessage.Bytes.Length > 0)
+                                {
+                                    var shaHit = await DeletionMarkerHashCheck.FindAsync(_markers, account.Id, rawMessage.Bytes, cancellationToken);
+                                    if (shaHit != null)
+                                    {
+                                        await SkipDeletedByUserAsync(account, folder, uid.Id, problems, shaHit, message.Date.DateTime, message.MessageId, result, !watermarkFrozen, cancellationToken);
+                                        continue;
                                     }
                                 }
 
@@ -1933,6 +2016,9 @@ namespace MailArchiver.Services.Providers.Imap
             /// on the Integrity &amp; Storage page, and the account is never reported as completely archived while any exist.
             /// </summary>
             public int QuarantinedEmails { get; set; }
+
+            /// <summary>Messages not archived because they were deleted on purpose earlier (a deletion marker matched). Not a failure.</summary>
+            public int SkippedDeletedEmails { get; set; }
 
             /// <summary>
             /// Messages the normal fetch reported as missing and the IMAP fallback retrieved

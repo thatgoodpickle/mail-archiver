@@ -548,6 +548,7 @@ builder.Services.AddSingleton<MailArchiver.Services.Shared.IOriginalBin, MailArc
 builder.Services.AddScoped<MailArchiver.Services.Shared.IArchiveIdentityService, MailArchiver.Services.Shared.ArchiveIdentityService>();
 builder.Services.Configure<MailArchiver.Models.SyncQuarantineOptions>(builder.Configuration.GetSection(MailArchiver.Models.SyncQuarantineOptions.Section));
 builder.Services.AddScoped<MailArchiver.Services.Shared.ISyncProblemService, MailArchiver.Services.Shared.SyncProblemService>();
+builder.Services.AddScoped<MailArchiver.Services.Shared.IDeletionMarkerService, MailArchiver.Services.Shared.DeletionMarkerService>();
 builder.Services.AddScoped<MailArchiver.Services.Shared.IGmailMetaService, MailArchiver.Services.Shared.GmailMetaService>();
 builder.Services.AddHostedService<MailArchiver.Services.Shared.OriginalBinService>();
 
