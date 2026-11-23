@@ -48,11 +48,28 @@ namespace MailArchiver.Services.Shared
             var gid = meta.MessageId;
             if (string.IsNullOrEmpty(gid) && string.IsNullOrEmpty(messageId)) return 0;
 
-            var rows = await _db.ArchivedEmails.AsNoTracking()
-                .Where(e => e.MailAccountId == accountId
-                    && ((gid != null && e.GmailMessageId == gid) || (messageId != null && e.MessageId == messageId)))
-                .Select(e => new { e.Id, e.Labels, e.GmailMessageId, e.GmailThreadId, e.IsOutgoing, e.IsLocked })
-                .ToListAsync(ct);
+            // Audit finding 8: a row is matched by its Gmail id when the server message has one. The Message-ID is only the way to find a row
+            // that does not hold a Gmail id yet, and only when exactly one such row exists: two Gmail messages can share a Message-ID, and
+            // matching by it would write one message's labels and Gmail id onto the other.
+            var hasGid = !string.IsNullOrEmpty(gid);
+            var query = _db.ArchivedEmails.AsNoTracking().Where(e => e.MailAccountId == accountId);
+            var rows = hasGid
+                ? await query.Where(e => e.GmailMessageId == gid)
+                    .Select(e => new { e.Id, e.Labels, e.GmailMessageId, e.GmailThreadId, e.IsOutgoing, e.IsLocked }).ToListAsync(ct)
+                : new();
+            if (hasGid && rows.Count == 0 && messageId != null)
+            {
+                var candidates = await query.Where(e => e.GmailMessageId == null && e.MessageId == messageId)
+                    .Select(e => new { e.Id, e.Labels, e.GmailMessageId, e.GmailThreadId, e.IsOutgoing, e.IsLocked }).ToListAsync(ct);
+                if (candidates.Count == 1) rows = candidates;
+            }
+            else if (!hasGid && messageId != null)
+            {
+                // No Gmail id from the server: labels can still be matched by Message-ID when it is unambiguous; ids are never overwritten.
+                var candidates = await query.Where(e => e.MessageId == messageId)
+                    .Select(e => new { e.Id, e.Labels, e.GmailMessageId, e.GmailThreadId, e.IsOutgoing, e.IsLocked }).ToListAsync(ct);
+                if (candidates.Count == 1) rows = candidates;
+            }
 
             var changed = 0;
             var labels = meta.Labels.ToList();
@@ -61,14 +78,19 @@ namespace MailArchiver.Services.Shared
             foreach (var r in rows)
             {
                 var labelsChanged = !GmailLabels.SameSet(r.Labels, labels);
-                var idsChanged = r.GmailMessageId != meta.MessageId || r.GmailThreadId != meta.ThreadId;
+                var idsChanged = hasGid && (r.GmailMessageId != meta.MessageId || r.GmailThreadId != meta.ThreadId);
                 if (labelsChanged || idsChanged)
                 {
-                    await _db.ArchivedEmails.Where(e => e.Id == r.Id).ExecuteUpdateAsync(u => u
-                        .SetProperty(e => e.Labels, labels)
-                        .SetProperty(e => e.GmailMessageId, meta.MessageId)
-                        .SetProperty(e => e.GmailThreadId, meta.ThreadId)
-                        .SetProperty(e => e.LabelsCapturedAt, now), ct);
+                    if (hasGid)
+                        await _db.ArchivedEmails.Where(e => e.Id == r.Id).ExecuteUpdateAsync(u => u
+                            .SetProperty(e => e.Labels, labels)
+                            .SetProperty(e => e.GmailMessageId, meta.MessageId)
+                            .SetProperty(e => e.GmailThreadId, meta.ThreadId)
+                            .SetProperty(e => e.LabelsCapturedAt, now), ct);
+                    else
+                        await _db.ArchivedEmails.Where(e => e.Id == r.Id).ExecuteUpdateAsync(u => u
+                            .SetProperty(e => e.Labels, labels)
+                            .SetProperty(e => e.LabelsCapturedAt, now), ct);
                     changed++;
                     if (labelsChanged && _chain != null && _options.CurrentValue.AuditChainEnabled && _options.CurrentValue.ChainLabelChanges)
                         await _chain.AppendAsync("email.labels.changed", r.Id, null, new { old = r.Labels ?? new List<string>(), @new = labels }, ct);
