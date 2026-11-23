@@ -2,6 +2,7 @@ using MailArchiver.Models;
 using MailArchiver.Services.Shared;
 using MailArchiver.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
 
@@ -63,6 +64,72 @@ public class AuditFixesBIngestTests : IDisposable
 
             // And the failed message is archived normally when it is fetched again.
             Assert.Equal(ArchiveOutcome.Archived, await wired.Svc.ArchiveEmailOutcomeAsync(account, m1, false, "INBOX", new RawMessageCapture(b1, RawMessageSource.Imap)));
+        }
+        finally { await ReviewKit.CleanupAsync(ctx, account); }
+    }
+
+    /// <summary>A chain that loses its appends while <see cref="Down"/> is set (as a lock timeout would), and writes through to the real one otherwise.</summary>
+    private sealed class FlakyChain : IAuditChain
+    {
+        private readonly IAuditChain _real;
+        public bool Down; public bool EnabledFlag = true;
+        public FlakyChain(IAuditChain real) => _real = real;
+        public bool Enabled => EnabledFlag;
+        public Task<AuditChainEntry?> AppendAsync(string kind, int? emailId = null, string? sha256 = null, object? payload = null, CancellationToken cancellationToken = default)
+            => Down || !EnabledFlag ? Task.FromResult<AuditChainEntry?>(null) : _real.AppendAsync(kind, emailId, sha256, payload, cancellationToken);
+    }
+
+    private MailArchiverDbContextHolder Flaky(out FlakyChain chain)
+    {
+        chain = new FlakyChain(_kit.Chain);
+        var interceptor = new AuditChainInterceptor(new ServiceCollection().AddSingleton<IAuditChain>(chain).BuildServiceProvider());
+        return new MailArchiverDbContextHolder(_kit.NewContext(withChain: false, interceptor));
+    }
+
+    private sealed record MailArchiverDbContextHolder(MailArchiver.Data.MailArchiverDbContext Ctx);
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task F20_AnEmailWhoseOriginalStoredEntryWasLost_IsNotArchived_ButFailsAndIsArchivedOnTheRetry(bool lean, bool required)
+    {
+        var holder = Flaky(out var chain);
+        var ctx = holder.Ctx;
+        var account = await ReviewKit.SeedAccountAsync(ctx);
+        try
+        {
+            var (m, b, _) = ReviewKit.BuildMail();
+            var wired = _kit.Make(ctx, lean: lean, required: required, hashNamed: lean);
+            chain.Down = true;
+            var outcome = await wired.Svc.ArchiveEmailOutcomeAsync(account, m, false, "INBOX", new RawMessageCapture(b, RawMessageSource.Imap));
+            Assert.Equal(ArchiveOutcome.Failed, outcome);
+            // The sync turns Failed into ArchiveNotStoredException, which the classifier never counts towards the quarantine.
+            Assert.False(MailArchiver.Services.Providers.Imap.SyncFailureClassifier.CountsTowardsQuarantine(new ArchiveNotStoredException(outcome)));
+            await using (var check = _kit.NewContext())
+                Assert.Equal(0, await check.ArchivedEmails.CountAsync(e => e.MailAccountId == account.Id));
+
+            chain.Down = false;
+            Assert.Equal(ArchiveOutcome.Archived, await wired.Svc.ArchiveEmailOutcomeAsync(account, m, false, "INBOX", new RawMessageCapture(b, RawMessageSource.Imap)));
+            await using var check2 = _kit.NewContext();
+            var email = await check2.ArchivedEmails.AsNoTracking().SingleAsync(e => e.MailAccountId == account.Id);
+            Assert.Equal(1, await check2.AuditChain.CountAsync(c => c.Kind == "original.stored" && c.EmailId == email.Id));
+        }
+        finally { await ReviewKit.CleanupAsync(ctx, account); }
+    }
+
+    [Fact]
+    public async Task F20_WithTheChainSwitchedOff_ANullAppendIsNotAFailure()
+    {
+        var holder = Flaky(out var chain);
+        var ctx = holder.Ctx;
+        var account = await ReviewKit.SeedAccountAsync(ctx);
+        try
+        {
+            chain.EnabledFlag = false;
+            var (m, b, _) = ReviewKit.BuildMail();
+            var wired = _kit.Make(ctx, lean: false, required: true, hashNamed: false);
+            Assert.Equal(ArchiveOutcome.Archived, await wired.Svc.ArchiveEmailOutcomeAsync(account, m, false, "INBOX", new RawMessageCapture(b, RawMessageSource.Imap)));
         }
         finally { await ReviewKit.CleanupAsync(ctx, account); }
     }

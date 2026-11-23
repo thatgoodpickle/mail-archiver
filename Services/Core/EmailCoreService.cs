@@ -2180,6 +2180,16 @@ namespace MailArchiver.Services.Core
                             metrics: _metricsRecorder);
                     }
 
+                    // Audit finding 20 follow-up: an email whose original was stored but whose "original.stored" chain entry was lost (the chain
+                    // could not be reached, see AuditChain.FailedAppends) is not archived: it is taken back out and fails like any other transient
+                    // error (never counted towards the quarantine), so the next run reads it again and chains it.
+                    if (AuditChainInterceptor.TakeFailedOriginalAppends(_context).Contains(archivedEmail.Id))
+                    {
+                        _logger.LogError("Email {EmailId} was not archived: its 'original.stored' audit chain entry could not be written. It is taken back out and read again on the next sync.", archivedEmail.Id);
+                        await RemoveUnstoredEmailAsync(archivedEmail);
+                        return ArchiveOutcome.Failed;
+                    }
+
                     // Attachments are already saved via EF relationship (cascade)
                     _logger.LogInformation("Successfully saved email with {Count} attachments", emailAttachments.Count);
 

@@ -34,10 +34,15 @@ namespace MailArchiver.Services.Shared
         /// </summary>
         Task<AuditChainEntry?> AppendAsync(string kind, int? emailId = null, string? sha256 = null, object? payload = null,
             CancellationToken cancellationToken = default);
+
+        /// <summary>False when the chain is switched off (a null from <see cref="AppendAsync"/> is then not a failure).</summary>
+        bool Enabled => true;
     }
 
     public sealed class AuditChain : IAuditChain
     {
+        public bool Enabled => _options.Value.AuditChainEnabled;
+
         private const long LockKey = 7283640101;
         private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
@@ -290,6 +295,17 @@ namespace MailArchiver.Services.Shared
         private readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbContext, List<RawMessage>> _pending = new();
         private readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbContext, List<AccessLog>> _pendingAccess = new();
 
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbContext, List<int>> FailedOriginalAppends = new();
+
+        /// <summary>Email ids whose "original.stored" chain entry could not be written since the last call, for this context. Clears the list.</summary>
+        public static IReadOnlyList<int> TakeFailedOriginalAppends(DbContext ctx)
+        {
+            if (!FailedOriginalAppends.TryGetValue(ctx, out var list)) return Array.Empty<int>();
+            var copy = list.ToList();
+            list.Clear();
+            return copy;
+        }
+
         // Resolved lazily: the interceptor is created while the DbContext options are built, and the
         // chain writer needs a DbContext of its own.
         public AuditChainInterceptor(IServiceProvider services) => _services = services;
@@ -340,12 +356,16 @@ namespace MailArchiver.Services.Shared
                 var chain = _services.GetRequiredService<IAuditChain>();
                 foreach (var row in rows)
                 {
-                    await chain.AppendAsync("original.stored", row.ArchivedEmailId, row.Sha256, new
+                    var entry = await chain.AppendAsync("original.stored", row.ArchivedEmailId, row.Sha256, new
                     {
                         source = row.Source.ToString(),
                         storage = row.StorageType,
                         size = row.Size
                     }, cancellationToken);
+                    // Audit finding 20 follow-up: the save is committed, so a lost entry cannot be undone here. It is remembered for the
+                    // ingest, which takes the email back out and fails the message (read again next run) instead of archiving it unchained.
+                    if (entry == null && chain.Enabled)
+                        FailedOriginalAppends.GetOrCreateValue(ctx).Add(row.ArchivedEmailId);
                 }
             }
             return await base.SavedChangesAsync(eventData, result, cancellationToken);
