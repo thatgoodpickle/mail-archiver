@@ -51,6 +51,8 @@ internal sealed class FakeImapServer : IDisposable
     /// <summary>Called after a body was sent (folder, uid).</summary>
     public Action<string, uint>? AfterBodySent { get; set; }
     public int BodyFetches;
+    /// <summary>When set, a SEARCH that has a SINCE/SENTSINCE key returns at most this many UIDs (a server with a result limit).</summary>
+    public int? CapSinceSearch;
 
     public FakeImapServer(bool gmail = true)
     {
@@ -188,6 +190,7 @@ internal sealed class FakeImapServer : IDisposable
                             List<Msg> msgs; lock (_gate) msgs = selected.Messages.ToList();
                             var ids = Search(msgs, t.Skip(1).ToList(), out var err);
                             if (err != null) { await Write(stream, $"{tag} NO {err}\r\n"); break; }
+                            if (CapSinceSearch is int cap && t.Any(x => x.Equals("SINCE", StringComparison.OrdinalIgnoreCase) || x.Equals("SENTSINCE", StringComparison.OrdinalIgnoreCase))) ids = ids.Take(cap).ToList();
                             // Sequence numbers are used when not in UID mode.
                             var outIds = uidMode ? ids.Select(m => m.Uid) : ids.Select(m => (uint)(msgs.IndexOf(m) + 1));
                             await Write(stream, $"* SEARCH{string.Concat(outIds.Select(i => " " + i))}\r\n{tag} OK search done\r\n");
