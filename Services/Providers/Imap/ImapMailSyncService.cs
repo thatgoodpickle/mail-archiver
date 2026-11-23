@@ -1644,7 +1644,8 @@ namespace MailArchiver.Services.Providers.Imap
                                 {
                                     try
                                     {
-                                        var failure = await _problems.RecordFailureAsync(account.Id, folder.FullName, folder.UidValidity, uid.Id, emailMessageId, innermostEx.Message, cancellationToken);
+                                        var failure = await _problems.RecordFailureAsync(account.Id, folder.FullName, folder.UidValidity, uid.Id, emailMessageId, innermostEx.Message, cancellationToken,
+                                            batchMeta.TryGetValue(uid.Id, out var failedMeta) ? failedMeta.MessageId : null);
                                         quarantinedNow = failure.Quarantined;
                                         if (quarantinedNow)
                                             _logger.LogError("Message UID {Uid} in folder {FolderName} of account {AccountName} failed {Count} times in a row and is QUARANTINED: the sync moves on, and it is listed on the Integrity & Storage page",

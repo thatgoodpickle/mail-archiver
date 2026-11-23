@@ -1,0 +1,106 @@
+@using MailArchiver.Services.Shared
+@model CoverageResult?
+@{
+    ViewData["Title"] = "Coverage check";
+    var accountId = (int)ViewBag.AccountId;
+    string Label(CoverageBucket b) => b switch
+    {
+        CoverageBucket.Archived => "Archived",
+        CoverageBucket.DeletedByYou => "Deleted by you (not archived again)",
+        CoverageBucket.Quarantined => "Set aside after failing (quarantined)",
+        CoverageBucket.FilteredOut => "Filtered out by the Gmail search filter",
+        _ => "Not yet seen"
+    };
+    var order = new[] { CoverageBucket.Archived, CoverageBucket.DeletedByYou, CoverageBucket.Quarantined, CoverageBucket.FilteredOut, CoverageBucket.NotYetSeen };
+}
+
+<div class="container">
+    <h2 class="mb-3">Coverage check: @ViewBag.AccountName</h2>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <p class="text-muted small">
+                Asks the mail server for the identity of every message in the synced folders (no message text is downloaded, nothing is changed on the
+                server) and sorts each one into exactly one group, in this order: archived, deleted by you, set aside, filtered out, not yet seen.
+                After a clean sync "not yet seen" is 0. It shows that the archive holds what the server listed, not that the server's copy was byte for byte the same.
+                Spam and Trash are outside the check unless the account syncs them. Mail that arrived after the last sync shows as "not yet seen".
+            </p>
+            <form asp-action="CoverageRun" asp-route-id="@accountId" method="post">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn btn-primary btn-sm">Run the coverage check</button>
+                <a asp-action="Details" asp-route-id="@accountId" class="btn btn-outline-secondary btn-sm">Back to the account</a>
+            </form>
+        </div>
+    </div>
+
+    @if (ViewBag.CoverageError != null)
+    {
+        <div class="alert alert-danger" role="alert">@ViewBag.CoverageError</div>
+    }
+
+    @if (Model != null)
+    {
+        <div class="card mb-3">
+            <div class="card-header"><strong>Result</strong> <span class="small text-muted">@Model.At.ToString("yyyy-MM-dd HH:mm") UTC; folders read: @string.Join(", ", Model.FoldersRead)</span></div>
+            <div class="card-body">
+                <table class="table table-sm align-middle w-auto">
+                    <tbody>
+                    @foreach (var b in order)
+                    {
+                        <tr><td>@Label(b)</td><td class="text-end">@Model.Buckets[b].ToString("N0")</td></tr>
+                    }
+                    <tr class="fw-bold"><td>Sum of the groups</td><td class="text-end">@Model.Sum.ToString("N0")</td></tr>
+                    <tr class="fw-bold"><td>Messages on the server</td><td class="text-end">@Model.ServerTotal.ToString("N0")</td></tr>
+                    </tbody>
+                </table>
+                @if (Model.Balanced)
+                {
+                    <p class="mb-2">✓ The groups add up to the number of messages on the server.</p>
+                }
+                else
+                {
+                    <div class="alert alert-danger" role="alert">The groups do NOT add up (@Model.Sum.ToString("N0") against @Model.ServerTotal.ToString("N0")). Do not rely on this result.</div>
+                }
+                @if (!string.IsNullOrEmpty(Model.FilterText))
+                {
+                    <p class="small text-muted">Gmail search filter in use: <code>@Model.FilterText</code></p>
+                }
+                @if (Model.Gmail)
+                {
+                    <p class="mb-1">Archived, no longer in Gmail: <strong>@Model.ArchivedNoLongerOnServer.ToString("N0")</strong> <span class="small text-muted">(information: the archive is now the only copy)</span></p>
+                    <p class="mb-1">Archived twice (same Gmail id): <strong>@Model.ArchivedTwice.ToString("N0")</strong> <span class="small text-muted">(should be 0)</span></p>
+                }
+            </div>
+        </div>
+
+        @if (Model.Buckets[CoverageBucket.NotYetSeen] == 0)
+        {
+            <p>✓ Nothing is waiting: every message on the server is accounted for.</p>
+        }
+        else
+        {
+            <div class="card mb-3">
+                <div class="card-header"><strong>Not yet seen</strong></div>
+                <div class="card-body">
+                    <p class="small text-muted">@Model.NotYetSeenListed.ToString("N0") of @Model.Buckets[CoverageBucket.NotYetSeen].ToString("N0") shown. Run a sync, then check again.</p>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead><tr><th>Folder</th><th>Message-ID</th><th class="text-end">Size</th><th>Find it</th></tr></thead>
+                            <tbody>
+                            @foreach (var n in Model.NotYetSeen)
+                            {
+                                <tr>
+                                    <td class="small">@n.Key.Folder</td>
+                                    <td><code class="small">@n.Key.MessageId</code></td>
+                                    <td class="text-end small">@n.Key.Size</td>
+                                    <td>@if (n.SearchLink != null) { <a href="@n.SearchLink" target="_blank" rel="noopener noreferrer">Search in Gmail</a> } else { <span class="text-muted small">UID @n.Key.Uid</span> }</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+</div>

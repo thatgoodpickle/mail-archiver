@@ -1769,6 +1769,47 @@ namespace MailArchiver.Controllers
             return RedirectToAction(nameof(Details), new { id });
         }
 
+        // GET: MailAccounts/Coverage/5 - the coverage check page (read-only towards the mailbox)
+        [HttpGet]
+        public async Task<IActionResult> Coverage(int id)
+        {
+            var account = await CoverageAccountAsync(id);
+            if (account == null) return NotFound();
+            ViewBag.AccountName = account.Name; ViewBag.AccountId = id;
+            return View("Coverage", (MailArchiver.Services.Shared.CoverageResult?)null);
+        }
+
+        // POST: MailAccounts/CoverageRun/5 - lists the keys on the server (no bodies, nothing written) and classifies every message
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> CoverageRun(int id)
+        {
+            var account = await CoverageAccountAsync(id);
+            if (account == null) return NotFound();
+            ViewBag.AccountName = account.Name; ViewBag.AccountId = id;
+            var service = HttpContext.RequestServices.GetService<MailArchiver.Services.Shared.ICoverageService>();
+            if (service == null || account.Provider != ProviderType.IMAP) { ViewBag.CoverageError = "The coverage check is available for IMAP accounts only."; return View("Coverage", (MailArchiver.Services.Shared.CoverageResult?)null); }
+            try
+            {
+                var result = await service.RunAsync(account, 200, HttpContext.RequestAborted);
+                return View("Coverage", result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Coverage check of account {AccountName} failed", account.Name);
+                ViewBag.CoverageError = "The check could not be done: " + (ex.Message.Length > 300 ? ex.Message[..300] : ex.Message);
+                return View("Coverage", (MailArchiver.Services.Shared.CoverageResult?)null);
+            }
+        }
+
+        private async Task<MailAccount?> CoverageAccountAsync(int id)
+        {
+            if (!await HasAccessToAccountAsync(id)) return null;
+            var authService = HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>();
+            if (!(authService?.IsCurrentUserAdmin(HttpContext) ?? false)) return null;
+            return await _context.MailAccounts.FindAsync(id);
+        }
+
         // POST: MailAccounts/ReleaseMarkers/5  ("Allow again", delete memory). markerId null = all of the account.
         // The released mail comes back at the next FULL resync, so startFullSync offers to start one right away.
         [HttpPost]

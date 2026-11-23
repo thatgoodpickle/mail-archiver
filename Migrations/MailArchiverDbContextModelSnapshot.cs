@@ -1081,6 +1081,9 @@ namespace MailArchiver.Migrations
                     b.Property<int>("MailAccountId")
                         .HasColumnType("integer");
 
+                    b.Property<string>("GmailMessageId")
+                        .HasColumnType("text");
+
                     b.Property<string>("MessageId")
                         .HasColumnType("text");
 

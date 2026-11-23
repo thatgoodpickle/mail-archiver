@@ -13,7 +13,7 @@ namespace MailArchiver.Services.Shared
         Task<IReadOnlyDictionary<long, SyncProblemMessage>> LoadAsync(int accountId, string folderName, long uidValidity, CancellationToken cancellationToken = default);
 
         /// <summary>Counts one more failure of a message; quarantines it once the count reaches the limit.</summary>
-        Task<SyncFailureResult> RecordFailureAsync(int accountId, string folderName, long uidValidity, long uid, string? messageId, string reason, CancellationToken cancellationToken = default);
+        Task<SyncFailureResult> RecordFailureAsync(int accountId, string folderName, long uidValidity, long uid, string? messageId, string reason, CancellationToken cancellationToken = default, string? gmailMessageId = null);
 
         /// <summary>A message was archived after all: its problem record goes.</summary>
         Task ResolveAsync(int accountId, string folderName, long uidValidity, long uid, CancellationToken cancellationToken = default);
@@ -44,7 +44,7 @@ namespace MailArchiver.Services.Shared
                 .Where(p => p.MailAccountId == accountId && p.FolderName == folderName && p.UidValidity == uidValidity)
                 .ToListAsync(ct)).ToDictionary(p => p.Uid);
 
-        public async Task<SyncFailureResult> RecordFailureAsync(int accountId, string folderName, long uidValidity, long uid, string? messageId, string reason, CancellationToken ct = default)
+        public async Task<SyncFailureResult> RecordFailureAsync(int accountId, string folderName, long uidValidity, long uid, string? messageId, string reason, CancellationToken ct = default, string? gmailMessageId = null)
         {
             var now = DateTime.UtcNow;
             var row = await _db.SyncProblemMessages.FirstOrDefaultAsync(p =>
@@ -57,6 +57,7 @@ namespace MailArchiver.Services.Shared
             row.FailCount++;
             row.LastSeen = now;
             row.Reason = Clip(reason, 2000);
+            if (!string.IsNullOrEmpty(gmailMessageId)) row.GmailMessageId = Clip(gmailMessageId, 40);
             if (!string.IsNullOrEmpty(messageId) && messageId != "Unknown" && messageId != "No Message-ID") row.MessageId = Clip(messageId, 500);
             if (row.FailCount >= Limit && row.Status != SyncProblemMessage.Quarantined)
             {

@@ -18,6 +18,9 @@ namespace MailArchiver.Models
         public long UidValidity { get; set; }
         public long Uid { get; set; }
         public string? MessageId { get; set; }
+
+        /// <summary>Gmail's X-GM-MSGID of the message when it was first recorded (coverage check: a quarantined message must match its server message). UidValidity above is the folder's UIDVALIDITY.</summary>
+        public string? GmailMessageId { get; set; }
         public string Reason { get; set; } = string.Empty;
         public int FailCount { get; set; }
         public DateTime FirstSeen { get; set; } = DateTime.UtcNow;
