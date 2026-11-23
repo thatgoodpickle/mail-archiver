@@ -378,6 +378,19 @@ namespace MailArchiver.Controllers
             // pretending the account is fine.
             ViewBag.LastRun = _syncJobService.GetLastCompletedJobForAccount(account.Id);
 
+            // Delete memory: messages deleted on purpose and therefore not archived again, each with "Allow again".
+            var markerService = HttpContext.RequestServices.GetService<MailArchiver.Services.Shared.IDeletionMarkerService>();
+            if (markerService != null)
+            {
+                try
+                {
+                    ViewBag.MarkerTotal = await markerService.CountAsync(account.Id);
+                    ViewBag.Markers = await markerService.ListAsync(account.Id, 200);
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "Could not list the deletion markers of account {AccountId}", account.Id); ViewBag.MarkerError = ex.Message; }
+            }
+            ViewBag.IsAdmin = (HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>())?.IsCurrentUserAdmin(HttpContext) ?? false;
+
             return View(model);
         }
 
@@ -1753,6 +1766,46 @@ namespace MailArchiver.Controllers
                 TempData["ErrorMessage"] = $"{_localizer["FullSyncError"]}: {ex.Message}";
             }
 
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
+        // POST: MailAccounts/ReleaseMarkers/5  ("Allow again", delete memory). markerId null = all of the account.
+        // The released mail comes back at the next FULL resync, so startFullSync offers to start one right away.
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> ReleaseMarkers(int id, int? markerId, bool startFullSync = false)
+        {
+            if (!await HasAccessToAccountAsync(id)) return NotFound();
+            var authService = HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>();
+            if (!(authService?.IsCurrentUserAdmin(HttpContext) ?? false)) return Forbid();
+            var account = await _context.MailAccounts.FindAsync(id);
+            if (account == null) return NotFound();
+
+            var markers = HttpContext.RequestServices.GetService<MailArchiver.Services.Shared.IDeletionMarkerService>();
+            if (markers == null) { TempData["ErrorMessage"] = "Not available."; return RedirectToAction(nameof(Details), new { id }); }
+
+            try
+            {
+                var who = authService.GetCurrentUserDisplayName(HttpContext) ?? "unknown";
+                var n = await markers.ReleaseAsync(id, markerId, who);
+                if (!string.IsNullOrEmpty(who))
+                    await _accessLogService.LogAccessAsync(who, AccessLogType.Account,
+                        searchParameters: $"Allowed again {n} message(s) deleted earlier, mail account: {account.Name}", mailAccountId: account.Id);
+                var message = n == 0
+                    ? "Nothing was released."
+                    : $"{n} {(n == 1 ? "message" : "messages")} allowed again. They are archived again at the next Full resync.";
+                if (n > 0 && startFullSync && account.Provider != ProviderType.IMPORT)
+                {
+                    var provider = await _providerFactory.GetServiceForAccountAsync(id);
+                    message += await provider.ResyncAccountAsync(id) ? " A Full resync was started." : " A Full resync could not be started.";
+                }
+                TempData[n == 0 ? "ErrorMessage" : "SuccessMessage"] = message;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Could not release deletion markers of account {AccountName}", account.Name);
+                TempData["ErrorMessage"] = "The messages could not be allowed again: " + (ex.Message.Length > 200 ? ex.Message[..200] : ex.Message);
+            }
             return RedirectToAction(nameof(Details), new { id });
         }
 

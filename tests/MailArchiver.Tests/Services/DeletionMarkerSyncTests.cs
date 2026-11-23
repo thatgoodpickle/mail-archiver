@@ -72,6 +72,8 @@ public class DeletionMarkerFailClosedTests
         public Task<int> CountAsync(int accountId, CancellationToken ct = default) => Task.FromResult(Count());
         public Task<IReadOnlyList<DeletedMessageMarker>> CandidatesAsync(int accountId, IReadOnlyCollection<string> g, IReadOnlyCollection<string> m, CancellationToken ct = default) => Task.FromResult(Candidates());
         public Task<DeletedMessageMarker?> FindByHashAsync(int accountId, string sha256, CancellationToken ct = default) => Task.FromResult(ByHash());
+        public Task<IReadOnlyList<DeletedMessageMarker>> ListAsync(int accountId, int limit, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<int> ReleaseAsync(int accountId, int? markerId, string who, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private static readonly IReadOnlyList<MarkerProbe> Probes = new[]
@@ -173,6 +175,8 @@ public class DeletionMarkerFailClosedTests
         public Task<int> CountAsync(int a, CancellationToken c = default) => _inner.CountAsync(a, c);
         public Task<IReadOnlyList<DeletedMessageMarker>> CandidatesAsync(int a, IReadOnlyCollection<string> g, IReadOnlyCollection<string> m, CancellationToken c = default) => _inner.CandidatesAsync(a, g, m, c);
         public Task<DeletedMessageMarker?> FindByHashAsync(int a, string sha, CancellationToken c = default) { _seen(sha); return _inner.FindByHashAsync(a, sha, c); }
+        public Task<IReadOnlyList<DeletedMessageMarker>> ListAsync(int a, int l, CancellationToken c = default) => _inner.ListAsync(a, l, c);
+        public Task<int> ReleaseAsync(int a, int? m, string w, CancellationToken c = default) => _inner.ReleaseAsync(a, m, w, c);
     }
 }
 

@@ -127,12 +127,49 @@ namespace MailArchiver.Services.Shared
 
         /// <summary>The marker of an original with this SHA-256, if any. Throws on a database error: callers must fail closed.</summary>
         Task<DeletedMessageMarker?> FindByHashAsync(int accountId, string sha256, CancellationToken cancellationToken = default);
+
+        /// <summary>The account's markers, newest first (identifiers only).</summary>
+        Task<IReadOnlyList<DeletedMessageMarker>> ListAsync(int accountId, int limit, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// "Allow again": records <c>marker.released</c> in the audit chain (who, when, which marker) and only then removes the marker, one
+        /// by one. A marker whose chain entry could not be written is NOT removed. <paramref name="markerId"/> null = all of the account.
+        /// Returns how many were released.
+        /// </summary>
+        Task<int> ReleaseAsync(int accountId, int? markerId, string who, CancellationToken cancellationToken = default);
     }
 
     public sealed class DeletionMarkerService : IDeletionMarkerService
     {
         private readonly MailArchiverDbContext _db;
-        public DeletionMarkerService(MailArchiverDbContext db) => _db = db;
+        private readonly IAuditChain? _chain;
+        public DeletionMarkerService(MailArchiverDbContext db, IAuditChain? chain = null) { _db = db; _chain = chain; }
+
+        public async Task<IReadOnlyList<DeletedMessageMarker>> ListAsync(int accountId, int limit, CancellationToken ct = default)
+            => await _db.DeletedMessageMarkers.AsNoTracking().Where(m => m.AccountId == accountId)
+                .OrderByDescending(m => m.DeletedAt).ThenByDescending(m => m.Id).Take(Math.Clamp(limit, 1, 5000)).ToListAsync(ct);
+
+        public async Task<int> ReleaseAsync(int accountId, int? markerId, string who, CancellationToken ct = default)
+        {
+            if (_chain == null) throw new InvalidOperationException("Releasing a marker needs the audit chain.");
+            var q = _db.DeletedMessageMarkers.AsNoTracking().Where(m => m.AccountId == accountId);
+            if (markerId != null) q = q.Where(m => m.Id == markerId);
+            var markers = await q.OrderBy(m => m.Id).ToListAsync(ct);
+            var released = 0;
+            foreach (var m in markers)
+            {
+                // Record first: an entry that could not be written means the marker stays.
+                var entry = await _chain.AppendAsync("marker.released", null, m.Sha256, new
+                {
+                    markerId = m.Id, accountId = m.AccountId, by = who, at = DateTime.UtcNow.ToString("O"),
+                    messageId = m.MessageId, gmailMessageId = m.GmailMessageId, size = m.Size, folder = m.Folder,
+                    deletedAt = m.DeletedAt.ToString("O"), deleteChainSeq = m.ChainSeq, reason = m.Reason
+                }, ct);
+                if (entry == null) continue;
+                released += await _db.DeletedMessageMarkers.Where(x => x.Id == m.Id).ExecuteDeleteAsync(ct);
+            }
+            return released;
+        }
 
         public Task<int> CountAsync(int accountId, CancellationToken ct = default)
             => _db.DeletedMessageMarkers.AsNoTracking().CountAsync(m => m.AccountId == accountId, ct);

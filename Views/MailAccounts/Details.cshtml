@@ -566,6 +566,70 @@
         </div>
     </div>
 
+    @* Delete memory: messages deleted on purpose are not archived again until they are allowed again. *@
+    @{
+        var markerList = ViewBag.Markers as IReadOnlyList<MailArchiver.Models.DeletedMessageMarker>;
+        var markerTotal = ViewBag.MarkerTotal as int? ?? 0;
+        var isAdminUser = ViewBag.IsAdmin as bool? ?? false;
+    }
+    @if (markerList != null && (markerTotal > 0 || ViewBag.MarkerError != null))
+    {
+        <div class="card mb-3" id="deleted-markers">
+            <div class="card-header"><strong>Skipped, deleted by you</strong></div>
+            <div class="card-body">
+                @if (ViewBag.MarkerError != null)
+                {
+                    <div class="alert alert-danger" role="alert">This part could not be loaded: @ViewBag.MarkerError</div>
+                }
+                <p class="text-muted small">
+                    These @markerTotal.ToString("N0") @(markerTotal == 1 ? "message was" : "messages were") deleted from the archive on purpose, so the sync does not archive @(markerTotal == 1 ? "it" : "them") again.
+                    Only identifiers are kept (no subject, sender or text). Allowing a message again lets the next <strong>Full resync</strong> archive it again.
+                    Deleting this account forgets all of them.
+                </p>
+                @if (isAdminUser && markerTotal > 0)
+                {
+                    <form asp-action="ReleaseMarkers" asp-route-id="@Model.Id" method="post" class="mb-2"
+                          onsubmit="return confirm('Allow all of these messages again?');">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="startFullSync" value="true" />
+                        <button type="submit" class="btn btn-outline-secondary btn-sm">Allow all again and start a Full resync</button>
+                    </form>
+                }
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead><tr><th>Deleted</th><th>Message</th><th>Folder</th><th>Why</th><th>Audit entry</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                        <tbody>
+                        @foreach (var mk in markerList)
+                        {
+                            <tr>
+                                <td class="small">@mk.DeletedAt.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                                <td><code class="small">@(mk.MessageId.Length > 48 ? mk.MessageId[..48] + "…" : mk.MessageId)</code></td>
+                                <td class="small">@mk.Folder</td>
+                                <td class="small">@(mk.Reason == "retention" ? "Retention policy" : "Deleted by a person")</td>
+                                <td class="small">#@mk.ChainSeq</td>
+                                <td class="text-end">
+                                    @if (isAdminUser)
+                                    {
+                                        <form asp-action="ReleaseMarkers" asp-route-id="@Model.Id" method="post" style="display:inline">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="markerId" value="@mk.Id" />
+                                            <button type="submit" class="btn btn-outline-secondary btn-sm">Allow again</button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+                @if (markerTotal > markerList.Count)
+                {
+                    <p class="small text-muted mb-0">Showing the newest @markerList.Count.ToString("N0") of @markerTotal.ToString("N0").</p>
+                }
+            </div>
+        </div>
+    }
+
     <div class="mt-3">
         <a asp-action="Index" class="btn btn-outline-secondary">
             <i class="bi bi-arrow-left"></i> @Localizer["BackToAccounts"]
