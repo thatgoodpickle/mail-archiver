@@ -134,6 +134,8 @@ namespace MailArchiver.Controllers
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> TestGmailFilter(int id, string? filter)
     {
+        // Audit finding 9: like every other account action, only for an account the user may access (it connects with the stored credentials).
+        if (!await HasAccessToAccountAsync(id)) return NotFound();
         var account = await _context.MailAccounts.FindAsync(id);
         if (account == null) return NotFound();
         if (_imapSync == null) return Json(new { ok = false, message = "Not available." });

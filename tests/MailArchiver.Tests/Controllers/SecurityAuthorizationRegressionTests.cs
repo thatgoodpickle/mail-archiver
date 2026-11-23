@@ -373,6 +373,21 @@ public class SecurityAuthorizationRegressionTests
     // ---------------------------------------------------------------- H1: import target authorization
 
     [Fact]
+    public async Task TestGmailFilter_NonAdminForeignAccount_ReturnsNotFound()
+    {
+        // Audit finding 9: the filter test connects with the stored credentials of the account, so it needs the same access check.
+        using var db = new SqliteDb();
+        var (own, foreign, _, _) = SeedTwoAccounts(db.Context);
+        // A SelfManager with no assignment to the account (the account-assignment table is empty).
+        var selfManager = CreateMailAccountsController(db.Context, Auth("bob", selfManager: true), UserWith(own));
+        Assert.IsType<NotFoundResult>(await selfManager.TestGmailFilter(foreign.Id, "label:Work"));
+
+        // Control: an admin passes the access check (no sync service here, so the answer is the "not available" JSON).
+        var admin = CreateMailAccountsController(db.Context, Auth("root", admin: true), UserWith(own));
+        Assert.IsType<JsonResult>(await admin.TestGmailFilter(foreign.Id, "label:Work"));
+    }
+
+    [Fact]
     public async Task ImportMBox_NonAdminForeignAccount_ReturnsNotFound()
     {
         using var db = new SqliteDb();
