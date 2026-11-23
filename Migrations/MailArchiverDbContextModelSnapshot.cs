@@ -1109,6 +1109,56 @@ namespace MailArchiver.Migrations
                     b.ToTable("SyncProblemMessages", "mail_archiver");
                 });
 
+            modelBuilder.Entity("MailArchiver.Models.DeletedMessageMarker", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("AccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("ChainSeq")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("DeletedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("Folder")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("GmailMessageId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MessageId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Sha256")
+                        .HasColumnType("text");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId", "GmailMessageId");
+
+                    b.HasIndex("AccountId", "Sha256");
+
+                    b.HasIndex("AccountId", "MessageId", "Size", "Folder")
+                        .IsUnique();
+
+                    b.ToTable("DeletedMessageMarkers", "mail_archiver");
+                });
+
             modelBuilder.Entity("MailArchiver.Models.SyncCheckpoint", b =>
                 {
                     b.Property<int>("Id")
@@ -1306,6 +1356,15 @@ namespace MailArchiver.Migrations
                         .IsRequired();
 
                     b.Navigation("MailAccount");
+                });
+
+            modelBuilder.Entity("MailArchiver.Models.DeletedMessageMarker", b =>
+                {
+                    b.HasOne("MailAccount", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("MailArchiver.Models.BandwidthUsage", b =>

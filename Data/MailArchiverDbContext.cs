@@ -23,6 +23,7 @@ namespace MailArchiver.Data
         public DbSet<OriginalBinEntry> OriginalBinEntries { get; set; }
         public DbSet<ArchiveIdentity> ArchiveIdentities { get; set; }
         public DbSet<SyncProblemMessage> SyncProblemMessages { get; set; }
+        public DbSet<DeletedMessageMarker> DeletedMessageMarkers { get; set; }
         public DbSet<AppSetting> AppSettings { get; set; }
         public DbSet<OriginalCleanupRun> OriginalCleanupRuns { get; set; }
         public DbSet<AttachmentText> AttachmentTexts { get; set; }
@@ -261,6 +262,17 @@ namespace MailArchiver.Data
                 e.Property(x => x.FirstSeen).HasColumnType("timestamp without time zone");
                 e.Property(x => x.LastSeen).HasColumnType("timestamp without time zone");
                 e.Property(x => x.QuarantinedAt).HasColumnType("timestamp without time zone");
+            });
+            // Delete memory: identifiers of emails deleted on purpose, written by the email.deleted trigger. Goes with the account.
+            modelBuilder.Entity<DeletedMessageMarker>(e =>
+            {
+                e.ToTable("DeletedMessageMarkers", "mail_archiver");
+                e.HasKey(x => x.Id);
+                e.HasOne<MailAccount>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+                e.HasIndex(x => new { x.AccountId, x.MessageId, x.Size, x.Folder }).IsUnique();
+                e.HasIndex(x => new { x.AccountId, x.GmailMessageId });
+                e.HasIndex(x => new { x.AccountId, x.Sha256 });
+                e.Property(x => x.DeletedAt).HasColumnType("timestamp without time zone");
             });
             modelBuilder.Entity<ArchiveIdentity>(e => { e.ToTable("ArchiveIdentity", "mail_archiver"); e.HasKey(x => x.Id); e.Property(x => x.Id).ValueGeneratedNever(); e.Property(x => x.CreatedAt).HasColumnType("timestamp without time zone"); });
 
