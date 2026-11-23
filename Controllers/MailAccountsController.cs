@@ -115,15 +115,27 @@ namespace MailArchiver.Controllers
     }
 
     /// <summary>Records a change of the Gmail search filter in the audit chain (what the archive claims to contain depends on it).</summary>
-    private async Task RecordFilterChangeAsync(MailAccount account, string? oldFilter, string? newFilter, bool confirmedLargeSkip)
+    private async Task RecordFilterChangeAsync(MailAccount account, string? oldFilter, string? newFilter, bool confirmedLargeSkip, bool initial = false)
     {
         if (_auditChain == null) return;
-        var was = MailArchiver.Services.Shared.GmailAccount.EffectiveFilter(new MailAccount { ImapServer = account.ImapServer, GmailSearchFilter = oldFilter });
-        var now = MailArchiver.Services.Shared.GmailAccount.EffectiveFilter(account);
-        if (string.Equals(was, now, StringComparison.Ordinal)) return;
+        var change = FilterChange(account, oldFilter, initial);
+        if (change == null) return;
         var authService = HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>();
         await _auditChain.AppendAsync("account.filter.changed", null, null,
-            new { accountId = account.Id, account = account.Name, old = was, @new = now, actor = authService?.GetCurrentUserDisplayName(HttpContext), confirmedLargeSkip });
+            new { accountId = account.Id, account = account.Name, old = change.Value.Was, @new = change.Value.Now, actor = authService?.GetCurrentUserDisplayName(HttpContext), confirmedLargeSkip, initial });
+    }
+
+    /// <summary>
+    /// What to chain for a filter change, or null when nothing changed. Audit finding 11: a NEW account has no earlier filter, so its effective
+    /// filter (the default one for Gmail) is always recorded: the claim for the account starts with that entry. Before, "old" was computed as
+    /// the default too, both sides compared equal and nothing was written.
+    /// </summary>
+    internal static (string? Was, string? Now)? FilterChange(MailAccount account, string? oldFilter, bool initial)
+    {
+        var now = MailArchiver.Services.Shared.GmailAccount.EffectiveFilter(account);
+        if (initial) return MailArchiver.Services.Shared.GmailAccount.Is(account) ? (null, now) : null;
+        var was = MailArchiver.Services.Shared.GmailAccount.EffectiveFilter(new MailAccount { ImapServer = account.ImapServer, GmailSearchFilter = oldFilter });
+        return string.Equals(was, now, StringComparison.Ordinal) ? null : (was, now);
     }
 
     /// <summary>The filter the Test button posted: absent = the default filter, present (even empty) = exactly what was typed.</summary>
@@ -138,6 +150,11 @@ namespace MailArchiver.Controllers
         if (!await HasAccessToAccountAsync(id)) return NotFound();
         var account = await _context.MailAccounts.FindAsync(id);
         if (account == null) return NotFound();
+        // Audit finding 9 follow-up: the test connects to the mailbox, so it is written to the access log (who, which account, which filter).
+        var tester = HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>()?.GetCurrentUserDisplayName(HttpContext);
+        if (!string.IsNullOrEmpty(tester))
+            await _accessLogService.LogAccessAsync(tester, AccessLogType.Account,
+                searchParameters: $"Tested Gmail filter on account {account.Name}: {FilterPosted(Request)}", mailAccountId: account.Id);
         if (_imapSync == null) return Json(new { ok = false, message = "Not available." });
         // The posted field is read raw: MVC would turn an empty value into null, and null here means "the default", not "no filter".
         var r = await _imapSync.TestGmailFilterAsync(account, FilterPosted(Request));
@@ -579,7 +596,7 @@ namespace MailArchiver.Controllers
                     _logger.LogInformation("Saving account to database");
                     _context.MailAccounts.Add(account);
                     await _context.SaveChangesAsync();
-                    await RecordFilterChangeAsync(account, null, account.GmailSearchFilter, false);   // the claim for this account starts here
+                    await RecordFilterChangeAsync(account, null, account.GmailSearchFilter, false, initial: true);   // the claim for this account starts here
 
                     // Auto-assign the account to the current user if they are a SelfManager (not Admin)
                     var authService = HttpContext.RequestServices.GetService<MailArchiver.Services.IAuthenticationService>();

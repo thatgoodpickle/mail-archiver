@@ -272,6 +272,7 @@ namespace MailArchiver.Services.Providers.Imap
                                 job.ProcessedEmails = processedEmails;
                                 job.NewEmails = newEmails;
                                 job.SkippedDeletedEmails = skippedDeletedEmails;
+                                job.QuarantinedEmails = quarantinedEmails;
                                 job.FailedEmails = failedEmails;
                                 job.FailedFolders = failedFolders;
                                 job.MissingFolders = missingFolders;

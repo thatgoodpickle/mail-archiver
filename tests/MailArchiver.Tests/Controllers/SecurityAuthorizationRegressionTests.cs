@@ -231,7 +231,8 @@ public class SecurityAuthorizationRegressionTests
     private static MailAccountsController CreateMailAccountsController(
         MailArchiverDbContext ctx,
         IAuthenticationService auth,
-        IUserService? users = null)
+        IUserService? users = null,
+        IAccessLogService? accessLog = null)
     {
         var services = new TestServices(auth, users);
         var http = new DefaultHttpContext { RequestServices = services };
@@ -253,7 +254,7 @@ public class SecurityAuthorizationRegressionTests
             new PassThroughLocalizer(),
             services,
             Mock.Of<IExportService>(),
-            Mock.Of<IAccessLogService>(),
+            accessLog ?? Mock.Of<IAccessLogService>(),
             Mock.Of<IMailAccountDeletionService>(),
             Mock.Of<IMsaOAuthService>(),
             Options.Create(new MsaOAuthOptions()),
@@ -385,6 +386,38 @@ public class SecurityAuthorizationRegressionTests
         // Control: an admin passes the access check (no sync service here, so the answer is the "not available" JSON).
         var admin = CreateMailAccountsController(db.Context, Auth("root", admin: true), UserWith(own));
         Assert.IsType<JsonResult>(await admin.TestGmailFilter(foreign.Id, "label:Work"));
+    }
+
+    [Fact]
+    public async Task TestGmailFilter_IsWrittenToTheAccessLog_WithUserAccountAndFilter()
+    {
+        using var db = new SqliteDb();
+        var (own, foreign, _, _) = SeedTwoAccounts(db.Context);
+        var log = new Mock<IAccessLogService>();
+        var admin = CreateMailAccountsController(db.Context, Auth("root", admin: true), UserWith(own), log.Object);
+        await admin.TestGmailFilter(foreign.Id, "label:Work");
+        log.Verify(l => l.LogAccessAsync("root", AccessLogType.Account, null, null, null, It.Is<string>(t => t.StartsWith("Tested Gmail filter") && t.Contains(foreign.Name) && t.Contains(MailArchiver.Services.Shared.GmailAccount.DefaultFilter)), foreign.Id), Times.Once);
+
+        // A refused call (no access) is not logged as a test.
+        var refused = new Mock<IAccessLogService>();
+        var selfManager = CreateMailAccountsController(db.Context, Auth("bob", selfManager: true), UserWith(own), refused.Object);
+        Assert.IsType<NotFoundResult>(await selfManager.TestGmailFilter(foreign.Id, "label:Work"));
+        refused.Verify(l => l.LogAccessAsync(It.IsAny<string>(), It.IsAny<AccessLogType>(), It.IsAny<int?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>()), Times.Never);
+    }
+
+    [Fact]
+    public void NewGmailAccount_WithTheDefaultFilter_RecordsItsInitialFilter_ButAnEditWithoutChangeDoesNot()
+    {
+        var gmail = new MailAccount { ImapServer = "imap.gmail.com", GmailSearchFilter = null };
+        var initial = MailAccountsController.FilterChange(gmail, null, initial: true);
+        Assert.NotNull(initial);
+        Assert.Null(initial!.Value.Was);
+        Assert.Equal(MailArchiver.Services.Shared.GmailAccount.DefaultFilter, initial.Value.Now);
+        // Control: an edit from null to null records nothing, and a real change does.
+        Assert.Null(MailAccountsController.FilterChange(gmail, null, initial: false));
+        Assert.NotNull(MailAccountsController.FilterChange(gmail, "label:Work", initial: false));
+        // A non-Gmail account has no filter claim.
+        Assert.Null(MailAccountsController.FilterChange(new MailAccount { ImapServer = "mail.example.test" }, null, initial: true));
     }
 
     [Fact]

@@ -71,6 +71,8 @@
                                                     { <div class="text-warning">@Localizer["Deleted"]: @job.DeletedEmails.ToString("N0")</div> }
                                                     @if (job.SkippedDeletedEmails > 0)
                                                     { <div class="text-muted">Skipped, deleted by you: @job.SkippedDeletedEmails.ToString("N0")</div> }
+                                                    @if (job.QuarantinedEmails > 0)
+                                                    { <div class="text-warning">Set aside after failing (quarantined): @job.QuarantinedEmails.ToString("N0")</div> }
                                                     @if (job.FailedEmails > 0)
                                                     { <div class="text-danger">@Localizer["Failed"]: @job.FailedEmails.ToString("N0")</div> }
                                                 </div>

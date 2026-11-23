@@ -15,6 +15,8 @@ namespace MailArchiver.Models
 
         /// <summary>Delete memory: messages not archived because they were deleted on purpose earlier (a marker matched). Shown as "Skipped, deleted by you".</summary>
         public int SkippedDeletedEmails { get; set; }
+        /// <summary>Messages set aside (quarantined) in the folders read so far; they are listed on the Integrity & Storage page.</summary>
+        public int QuarantinedEmails { get; set; }
         public int FailedEmails { get; set; }
 
         /// <summary>
