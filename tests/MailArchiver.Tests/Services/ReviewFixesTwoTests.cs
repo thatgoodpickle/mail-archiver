@@ -183,6 +183,27 @@ public class IntegrityReviewTwoTests : IAsyncLifetime
         finally { await CleanupAsync(ctx, a); }
     }
 
+    [Fact]
+    public async Task CalendarOnlyEmail_BodyMustBeTheCalendarSummary_NotAnyText()
+    {
+        var ctx = NewContext(); var a = await AccountAsync(ctx);
+        try
+        {
+            var mail = Build(_ => new TextPart("calendar") { Text = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nSUMMARY:Board meeting\r\nDTSTART:20260601T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n" });
+            var id = await ArchiveAsync(ctx, a, lean: false, mail);
+            var (_, integrity) = Make(ctx, false);
+            var genuine = await integrity(null).VerifyAsync(id);
+            Assert.True(genuine.Status == IntegrityStatus.Valid, string.Join(" | ", genuine.Findings));   // the genuine summary passes
+
+            await ctx.Database.ExecuteSqlInterpolatedAsync($"UPDATE mail_archiver.\"ArchivedEmails\" SET \"IsLocked\" = false, \"Body\" = 'Wire the money to account 123' WHERE \"Id\" = {id}");
+            ctx.ChangeTracker.Clear();
+            var forged = await integrity(null).VerifyAsync(id);
+            Assert.NotEqual(IntegrityStatus.Valid, forged.Status);
+            Assert.Contains(forged.Findings, f => f.Contains("calendar summary"));
+        }
+        finally { await CleanupAsync(ctx, a); }
+    }
+
     // ---- N-05 ---------------------------------------------------------------------------------------------
 
     private async Task AppendStoredEntryAsync()

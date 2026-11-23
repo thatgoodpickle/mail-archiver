@@ -359,10 +359,24 @@ namespace MailArchiver.Services.Shared
                 }
                 else notCompared.Add("Text body (over 100 KB, stored truncated)");
             }
-            else if (!string.IsNullOrWhiteSpace(e.Body) && CalendarContentHelper.TryExtractCalendar(message) == null)
+            else if (!string.IsNullOrWhiteSpace(e.Body))
             {
-                // N-13: the original has no text, so the database copy must not show any (a synthesized calendar summary is the one exception).
-                findings.Add("The stored text body has content, but the original has no text body.");
+                var calendar = CalendarContentHelper.TryExtractCalendar(message);
+                if (calendar == null)
+                {
+                    // N-13: the original has no text, so the database copy must not show any.
+                    findings.Add("The stored text body has content, but the original has no text body.");
+                }
+                else
+                {
+                    // Audit finding 16: the one exception is the summary ingest synthesizes from the calendar part; the stored body must be exactly that.
+                    var summary = CalendarContentHelper.ParseICalSummary(calendar.Content);
+                    if (Encoding.UTF8.GetByteCount(summary) >= MaxComparedBodyBytes)
+                        notCompared.Add("Text body (calendar summary over 100 KB, stored truncated)");
+                    else if (!string.Equals(e.Body, summary, StringComparison.Ordinal)
+                        && !string.Equals(e.Body, MailContentHelper.SanitizeLongTokens(summary) ?? string.Empty, StringComparison.Ordinal))
+                        findings.Add("The stored text body differs from the calendar summary of the original.");
+                }
             }
 
             // Lean rows keep no HTML body and no copy of the bodies: they are rebuilt from the original on every read.
@@ -423,7 +437,11 @@ namespace MailArchiver.Services.Shared
                 var rawText = message.TextBody;
                 if (e.OriginalBodyHtml != null && !MatchesAny(e.OriginalBodyHtml, rawHtml))
                     findings.Add("The stored original-HTML copy differs from the original.");
-                if (e.OriginalBodyText != null && !MatchesAny(e.OriginalBodyText, rawText, rawHtml))
+                // A calendar-only email: ingest stores the synthesized summary as the original text copy too (audit finding 16).
+                string? calendarSummary = null;
+                if (string.IsNullOrEmpty(rawText) && string.IsNullOrEmpty(rawHtml) && CalendarContentHelper.TryExtractCalendar(message) is { } cal)
+                    calendarSummary = CalendarContentHelper.ParseICalSummary(cal.Content);
+                if (e.OriginalBodyText != null && !MatchesAny(e.OriginalBodyText, rawText, rawHtml, calendarSummary))
                     findings.Add("The stored original-text copy differs from the original.");
             }
         }
