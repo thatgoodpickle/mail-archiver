@@ -361,6 +361,22 @@
                     <dd class="col-sm-9">@Model.StorageUsed</dd>
                 }
 
+                @if (ViewBag.IsGmailAccount == true)
+                {
+                    <dt class="col-sm-3">Automatic full sync</dt>
+                    <dd class="col-sm-9">
+                        @if (ViewBag.EffectiveFullSyncHours == null)
+                        {
+                            <span class="text-muted">Switched off</span>
+                        }
+                        else
+                        {
+                            <span>Every @ViewBag.EffectiveFullSyncHours hours</span>
+                        }
+                        <div class="form-text">It finds mail that entered All Mail with an old date ("Not spam", a removed label, a restore from Trash). The default is every 24 hours; change it or switch it off (0) under Edit, Advanced.</div>
+                    </dd>
+                }
+
                 <dt class="col-sm-3">@Localizer["LastSync"]</dt>
                 <dd class="col-sm-9">
                     @if (Model.IsSyncing)

@@ -205,11 +205,11 @@ namespace MailArchiver.Services
                         var performFullSync = false;
                         if (!alwaysForceFullSync)
                         {
-                            int? effectiveFullSyncIntervalHours = account.FullSyncIntervalHours ?? defaultFullSyncIntervalHours;
+                            // Gmail accounts default to a daily full sync (audit finding 4); 0 switches it off; other accounts are unchanged.
+                            int? effectiveFullSyncIntervalHours = MailArchiver.Services.Shared.GmailAccount.EffectiveFullSyncIntervalHours(account, defaultFullSyncIntervalHours);
                             if (effectiveFullSyncIntervalHours.HasValue)
                             {
                                 var fullIntervalHours = effectiveFullSyncIntervalHours.Value;
-                                if (fullIntervalHours < 1) fullIntervalHours = 1;
 
                                 // Seed lastFullSyncUtc from the DB column the first time we see
                                 // this account.
@@ -226,7 +226,7 @@ namespace MailArchiver.Services
                         {
                             _logger.LogInformation(
                                 "Scheduling automatic full sync for account {AccountName} (effective FullSyncIntervalHours={Hours})",
-                                account.Name, (account.FullSyncIntervalHours ?? defaultFullSyncIntervalHours).Value);
+                                account.Name, MailArchiver.Services.Shared.GmailAccount.EffectiveFullSyncIntervalHours(account, defaultFullSyncIntervalHours));
                         }
 
                         // The in-flight entry is the guard against starting an account twice, so it

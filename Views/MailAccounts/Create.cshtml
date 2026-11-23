@@ -371,8 +371,9 @@
                         </div>
                         <div class="mb-3">
                             <label asp-for="FullSyncIntervalHours" class="form-label">@Localizer["FullSyncIntervalHours"]</label>
-                            <input asp-for="FullSyncIntervalHours" class="form-control" type="number" min="1" placeholder="@Localizer["FullSyncIntervalHoursPlaceholder"]" />
+                            <input asp-for="FullSyncIntervalHours" class="form-control" type="number" min="0" placeholder="@Localizer["FullSyncIntervalHoursPlaceholder"]" />
                             <div class="form-text">@Localizer["FullSyncIntervalHoursInfo"]</div>
+                            <div class="form-text">Gmail accounts: when this field is empty a full sync runs every 24 hours (it finds mail that entered All Mail with an old date). Enter another number of hours to change it, or 0 to switch it off.</div>
                             <span asp-validation-for="FullSyncIntervalHours" class="text-danger"></span>
                         </div>
                     </div>

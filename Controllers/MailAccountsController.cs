@@ -372,6 +372,8 @@ namespace MailArchiver.Controllers
 
             // Same reason: an entry reaching downwards is invisible in a list of bare folder names.
             ViewBag.ExcludeSubfolders = _mailSyncOptions.ExcludeSubfolders;
+            ViewBag.IsGmailAccount = MailArchiver.Services.Shared.GmailAccount.Is(account);
+            ViewBag.EffectiveFullSyncHours = MailArchiver.Services.Shared.GmailAccount.EffectiveFullSyncIntervalHours(account, _mailSyncOptions.FullSyncIntervalHours);
 
             // The last run that reached an end, so the page can say what happened rather than only
             // when it happened. Null right after a restart, which the view says out loud instead of
@@ -896,6 +898,8 @@ namespace MailArchiver.Controllers
             // absurd. It needs the same switch the matcher gets, or it would claim a reach the sync
             // does not have.
             ViewBag.ExcludeSubfolders = _mailSyncOptions.ExcludeSubfolders;
+            ViewBag.IsGmailAccount = MailArchiver.Services.Shared.GmailAccount.Is(account);
+            ViewBag.EffectiveFullSyncHours = MailArchiver.Services.Shared.GmailAccount.EffectiveFullSyncIntervalHours(account, _mailSyncOptions.FullSyncIntervalHours);
 
             await PopulateMailcowViewDataAsync();
             await PopulateMailcowAccountStateAsync(model, id);
@@ -1073,6 +1077,8 @@ namespace MailArchiver.Controllers
             ViewBag.MsaHasDefaultClientId = _msaOptions.HasDefaultClientId;
             ViewBag.GlobalExcludedFolders = _mailSyncOptions.GlobalExcludedFolders;
             ViewBag.ExcludeSubfolders = _mailSyncOptions.ExcludeSubfolders;
+            ViewBag.IsGmailAccount = MailArchiver.Services.Shared.GmailAccount.Is(new MailAccount { ImapServer = model.ImapServer, FullSyncIntervalHours = model.FullSyncIntervalHours });
+            ViewBag.EffectiveFullSyncHours = MailArchiver.Services.Shared.GmailAccount.EffectiveFullSyncIntervalHours(new MailAccount { ImapServer = model.ImapServer, FullSyncIntervalHours = model.FullSyncIntervalHours }, _mailSyncOptions.FullSyncIntervalHours);
 
             // For MSA without a configured default ClientId, a per-account ClientId is required.
             if (model.Provider == ProviderType.MSA && !_msaOptions.HasDefaultClientId
@@ -2433,6 +2439,9 @@ namespace MailArchiver.Controllers
 
             // Set LastSync to the specified time (treat as local time and convert to UTC)
             accountToUpdate.LastSync = model.NewSyncTime.ToUniversalTime();
+            // Setting the time to the epoch asks for a full sync: the resume checkpoints go with it (audit finding 1).
+            if (accountToUpdate.LastSync <= new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc))
+                await _context.SyncCheckpoints.Where(c => c.MailAccountId == id).ExecuteDeleteAsync();
             await _context.SaveChangesAsync();
 
             TempData["SuccessMessage"] = _localizer["SyncTimeUpdatedSuccess"].Value;

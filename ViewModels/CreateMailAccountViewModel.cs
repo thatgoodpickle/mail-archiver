@@ -99,7 +99,7 @@ namespace MailArchiver.Models.ViewModels
         public int? SyncIntervalMinutes { get; set; }
 
         [Display(Name = "Full Sync Interval Hours")]
-        [Range(1, int.MaxValue, ErrorMessage = "Full sync interval hours must be at least 1")]
+        [Range(0, int.MaxValue, ErrorMessage = "Full sync interval hours must be 0 (off) or at least 1")]
         public int? FullSyncIntervalHours { get; set; }
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)

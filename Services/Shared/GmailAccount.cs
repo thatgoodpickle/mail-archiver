@@ -19,6 +19,24 @@ namespace MailArchiver.Services.Shared
             return f.Length == 0 ? null : f;
         }
 
+        /// <summary>
+        /// Audit finding 4: how often a Gmail account gets a periodic full sync when neither the account nor the installation sets a value.
+        /// The quick sync only looks at mail whose INTERNALDATE is recent, so mail that enters All Mail with an old date (Not spam, a removed
+        /// label, a looser filter, restore from Trash) is found only by a full sync.
+        /// </summary>
+        public const int DefaultFullSyncHours = 24;
+
+        /// <summary>
+        /// The effective periodic full sync interval in hours, or null for none: the account's own value, else the installation's
+        /// (MailSync:FullSyncIntervalHours), else <see cref="DefaultFullSyncHours"/> for Gmail accounts and none for any other account.
+        /// An explicit 0 (or less) switches it off.
+        /// </summary>
+        public static int? EffectiveFullSyncIntervalHours(MailAccount account, int? installationDefault)
+        {
+            var v = account.FullSyncIntervalHours ?? installationDefault ?? (Is(account) ? DefaultFullSyncHours : (int?)null);
+            return v is int h && h >= 1 ? h : null;
+        }
+
         /// <summary>True when only the folder with all mail is synced (the default for a Gmail account); the labels carry what the folders would have.</summary>
         public static bool AllMailOnly(MailAccount account) => Is(account) && (account.GmailAllMailOnly ?? true);
 
