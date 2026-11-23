@@ -1631,7 +1631,12 @@ namespace MailArchiver.Services.Providers.Imap
                                 // quarantined: the sync moves on (watermark and LastSync may advance past it) and it is listed with
                                 // its reason until an administrator retries it. Before that, behaviour is as before.
                                 var quarantinedNow = false;
-                                if (_problems != null)
+                                // Audit finding 3: only a failure that belongs to the message is counted; connection loss, Gmail's limits, a cancel,
+                                // a refused store or a database error are not. The run still fails (LastSync and the watermark stay put).
+                                var countsTowardsQuarantine = SyncFailureClassifier.CountsTowardsQuarantine(ex);
+                                if (!countsTowardsQuarantine)
+                                    _logger.LogWarning("The failure of UID {Uid} in folder {FolderName} belongs to the environment, not to the message ({Reason}); it is not counted towards quarantine and is tried again", uid.Id, folder.FullName, innermostEx.Message);
+                                if (_problems != null && countsTowardsQuarantine)
                                 {
                                     try
                                     {
