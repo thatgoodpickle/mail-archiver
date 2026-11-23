@@ -789,28 +789,46 @@ namespace MailArchiver.Services.Providers.Imap
                 if (all == null) return;
                 await all.OpenAsync(FolderAccess.ReadOnly, ct);
                 var uids = await all.SearchAsync(SearchQuery.All, ct);
-                var changed = 0; var seen = 0;
+                var changed = 0; var seen = 0; var bytes = 0L;
                 for (var i = 0; i < uids.Count; i += 500)
                 {
                     ct.ThrowIfCancellationRequested();
                     var batch = uids.Skip(i).Take(500).ToList();
                     var summaries = await all.FetchAsync(batch, MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.GMailLabels | MessageSummaryItems.GMailMessageId | MessageSummaryItems.GMailThreadId, ct);
-                    foreach (var s in summaries)
-                    {
-                        seen++;
-                        var meta = new MailArchiver.Services.Shared.GmailMeta(
-                            (s.GMailLabels ?? new List<string>()).Select(l => l ?? string.Empty).Where(l => l.Length > 0).ToList(), s.GMailMessageId?.ToString(), s.GMailThreadId?.ToString());
-                        changed += await _gmailMeta.ApplyAsync(account.Id, s.Envelope?.MessageId, meta, ct);
-                    }
+                    // Audit finding 19: this traffic counts towards the daily bandwidth limit (estimated from what came back).
+                    var batchBytes = EnvelopeTraffic.Estimate(summaries);
+                    bytes += batchBytes;
+                    seen += summaries.Count;
+                    // One set-based lookup per batch instead of one query per message.
+                    changed += await _gmailMeta.ApplyBatchAsync(account.Id, summaries.Select(s => (s.Envelope?.MessageId, new MailArchiver.Services.Shared.GmailMeta(
+                        (s.GMailLabels ?? new List<string>()).Select(l => l ?? string.Empty).Where(l => l.Length > 0).ToList(), s.GMailMessageId?.ToString(), s.GMailThreadId?.ToString()))).ToList(), ct);
                     _context.ChangeTracker.Clear();
+                    if (_bandwidthOptions.Enabled)
+                    {
+                        var (_, limitReached) = await _bandwidthService.TrackUsageAndCheckLimitAsync(account.Id, batchBytes, 0, 0);
+                        if (limitReached)
+                        {
+                            // Not marked as refreshed: the next day starts it again. Nothing is lost, labels only get stale for a day.
+                            _logger.LogWarning("Gmail label refresh of account {AccountName} stopped: the daily bandwidth limit is reached ({Seen} messages looked at, about {Bytes} bytes)", account.Name, seen, bytes);
+                            return;
+                        }
+                    }
                 }
                 await _context.MailAccounts.Where(a => a.Id == account.Id).ExecuteUpdateAsync(u => u.SetProperty(a => a.LabelsRefreshedAt, DateTime.UtcNow), ct);
-                _logger.LogInformation("Gmail labels refreshed for account {AccountName}: {Seen} messages looked at, {Changed} archived emails updated", account.Name, seen, changed);
+                _logger.LogInformation("Gmail labels refreshed for account {AccountName}: {Seen} messages looked at (about {Bytes} bytes counted towards the bandwidth limit), {Changed} archived emails updated", account.Name, seen, bytes, changed);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex, "Could not refresh the Gmail labels of account {AccountName}; the sync itself is not affected", account.Name);
             }
+        }
+
+        /// <summary>Audit finding 19: counts the estimated bytes of an envelope-only FETCH in the daily bandwidth usage. Never fails the caller.</summary>
+        private async Task TrackEnvelopeBytesAsync(MailAccount account, IEnumerable<IMessageSummary> summaries)
+        {
+            if (!_bandwidthOptions.Enabled) return;
+            try { await _bandwidthService.TrackUsageAndCheckLimitAsync(account.Id, EnvelopeTraffic.Estimate(summaries), 0, 0); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _logger.LogWarning(ex, "Could not count the envelope traffic of account {AccountName}", account.Name); }
         }
 
         private async Task<(Dictionary<uint, (DateTime Date, string? MessageId)> Skip, Dictionary<uint, MailArchiver.Services.Shared.GmailMeta> Meta)> PreSkipKnownAsync(
@@ -825,6 +843,7 @@ namespace MailArchiver.Services.Providers.Imap
                 var items = MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.Size;
                 if (gmailExt) items |= MessageSummaryItems.GMailLabels | MessageSummaryItems.GMailMessageId | MessageSummaryItems.GMailThreadId;
                 var summaries = await folder.FetchAsync(batch, items, cancellationToken);
+                await TrackEnvelopeBytesAsync(account, summaries);
 
                 // Fork (Gmail labels): what Gmail says about each message travels with it.
                 if (gmailExt)
@@ -875,6 +894,7 @@ namespace MailArchiver.Services.Providers.Imap
                     var items = MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.Size;
                     if (gmailExt) items |= MessageSummaryItems.GMailMessageId;
                     var summaries = await folder.FetchAsync(batch, items, cancellationToken);
+                    await TrackEnvelopeBytesAsync(account, summaries);
                     return (IReadOnlyList<MarkerProbe>)summaries.Select(s => new MarkerProbe(s.UniqueId.Id, s.GMailMessageId?.ToString(), s.Envelope?.MessageId, s.Size,
                         (s.Envelope?.Date ?? s.InternalDate ?? DateTimeOffset.UtcNow).DateTime)).ToList();
                 }, cancellationToken);
