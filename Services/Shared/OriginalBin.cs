@@ -503,6 +503,10 @@ namespace MailArchiver.Services.Shared
                     if (HashFile(bin) != sha) { x.C.Errors++; _logger.LogError("Bin copy of {Sha} does not match its name; live file left alone", sha); return; }
                     if (!await RecordAsync(x, "original.binned", sha, new { storagePath = rel, binPath = binRel, reason = "an identical copy is already in the bin", retentionDays = Opt.BinRetentionDays }, ct)) { x.C.Errors++; return; }
                     await UpsertEntryAsync(x, rel, sha, binRel, size, ct);
+                    // Audit finding 17: the same last-moment look as before a move (the awaited calls above leave a window in which an
+                    // ingest may have reused this file and touched it, or committed a row that refers to it).
+                    if (File.GetLastWriteTimeUtc(live) > DateTime.UtcNow - RecentWrite || await IsReferencedAsync(x.Db, rel, ct))
+                    { await AbandonMoveAsync(x, rel, sha, binRel, "an email started using it again", ct); x.C.Referenced++; return; }
                     File.Delete(live);
                     x.C.Binned++;
                     return;
