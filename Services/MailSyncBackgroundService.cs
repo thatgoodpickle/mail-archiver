@@ -424,12 +424,11 @@ namespace MailArchiver.Services
                     using (var resetScope = _serviceProvider.CreateScope())
                     {
                         var resetCtx = resetScope.ServiceProvider.GetRequiredService<MailArchiverDbContext>();
-                        var dbAccount = await resetCtx.MailAccounts.FindAsync(account.Id);
-                        if (dbAccount != null)
-                        {
-                            dbAccount.LastSync = EpochUtc;
-                            await resetCtx.SaveChangesAsync(ct);
-                        }
+                        // Audit finding 1: the resume checkpoints go with the reset, unless a full sync is already in progress
+                        // (LastSync still at 1970 = paused and resuming), which must not be restarted.
+                        var clear = MailArchiver.Services.Shared.FullSyncRequest.ShouldClearForAutomatic(account.LastSync);
+                        await MailArchiver.Services.Shared.FullSyncRequest.RequestAsync(resetCtx,
+                            resetScope.ServiceProvider.GetRequiredService<IBandwidthService>(), account.Id, clear, ct);
                     }
                     account.LastSync = EpochUtc;
                 }

@@ -499,8 +499,9 @@ namespace MailArchiver.Services.Providers.Imap
 
                 _logger.LogInformation("Starting full resync for IMAP account {AccountName}", account.Name);
 
-                account.LastSync = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-                await _context.SaveChangesAsync();
+                // Audit finding 1: a Full resync starts from nothing, so the resume watermarks go too. Cleared here, where it is
+                // requested; a normal (and a bandwidth-paused full) run still resumes from its checkpoints.
+                await MailArchiver.Services.Shared.FullSyncRequest.RequestAsync(_context, _bandwidthService, accountId, clearCheckpoints: true);
 
                 var accountForSync = await _context.MailAccounts.AsNoTracking().FirstOrDefaultAsync(a => a.Id == accountId);
                 if (accountForSync == null)
@@ -579,7 +580,7 @@ namespace MailArchiver.Services.Providers.Imap
 
         // Backoff delays (in milliseconds) for retrying a single message FETCH after a
         // transient server response such as "NO Service temporarily unavailable".
-        private static readonly int[] TransientFetchRetryDelaysMs = new[] { 5_000, 15_000, 60_000 };
+        internal static int[] TransientFetchRetryDelaysMs = new[] { 5_000, 15_000, 60_000 };
 
         /// <summary>
         /// Detects transient IMAP FETCH errors: server-side throttling responses

@@ -63,7 +63,7 @@ namespace MailArchiver.Services.Providers.Imap
         /// Connects to an IMAP server with SSL/TLS, falling back to STARTTLS if the initial
         /// SSL handshake fails.
         /// </summary>
-        public async Task ConnectWithFallbackAsync(ImapClient client, string server, int port, bool useSSL, string accountName)
+        public virtual async Task ConnectWithFallbackAsync(ImapClient client, string server, int port, bool useSSL, string accountName)
         {
             if (!useSSL)
             {
