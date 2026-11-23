@@ -318,7 +318,7 @@ namespace MailArchiver.Services
             CancellationToken cancellationToken,
             IRawMessageStore? rawMessageStore = null)
         {
-            const int batchSize = 1000;
+            const int batchSize = EmailDeletionService.DefaultDeleteBatchSize;   // short batches: the delete trigger holds the audit chain lock until commit (audit finding 20)
             var processedCount = 0;
 
             while (processedCount < job.TotalEmails)

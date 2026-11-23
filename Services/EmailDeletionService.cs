@@ -26,10 +26,14 @@ namespace MailArchiver.Services
         private readonly TimeSpan _completedJobRetention = TimeSpan.FromDays(7);
         private readonly int _batchSize;
 
+        // Audit finding 20: the delete trigger holds the audit chain's lock until the batch commits, so a batch of 1,000 rows kept concurrent
+        // chain appends (an original stored by the ingest) waiting for as long as the whole batch took. 100 rows keep that wait short.
+        public const int DefaultDeleteBatchSize = 100;
+
         public EmailDeletionService(
             ILogger<EmailDeletionService> logger,
             IServiceScopeFactory serviceScopeFactory,
-            int batchSize = 1000)
+            int batchSize = DefaultDeleteBatchSize)
         {
             _logger = logger;
             _serviceScopeFactory = serviceScopeFactory;

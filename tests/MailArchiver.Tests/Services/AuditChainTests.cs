@@ -58,6 +58,66 @@ public class AuditChainTests : IAsyncLifetime
         return await new AuditChainVerifier(ctx).VerifyAsync();
     }
 
+    // ---- audit finding 20: an append that cannot get the chain lock is retried, and a lost one is never silent ----
+
+    private static readonly long ChainLockKey = 7283640101;
+
+    private async Task<NpgsqlConnection> HoldChainLockAsync()
+    {
+        var c = new NpgsqlConnection(_fixture.ConnectionString);
+        await c.OpenAsync();
+        await using (var cmd = new NpgsqlCommand($"BEGIN; SELECT pg_advisory_xact_lock({ChainLockKey});", c)) await cmd.ExecuteNonQueryAsync();
+        return c;
+    }
+
+    private static async Task ReleaseAsync(NpgsqlConnection c)
+    {
+        await using (var cmd = new NpgsqlCommand("COMMIT;", c)) await cmd.ExecuteNonQueryAsync();
+        await c.DisposeAsync();
+    }
+
+    private IAuditChain ShortChain(TimeSpan[] delays)
+    {
+        var services = new ServiceCollection();
+        services.AddScoped(_ => NewContext());
+        return new AuditChain(services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
+            Opt.Create(new IntegrityOptions { AuditChainEnabled = true }), NullLogger<AuditChain>.Instance,
+            lockTimeoutSeconds: 1, retryDelays: delays);
+    }
+
+    [Fact]
+    public async Task AnAppend_ThatTimesOutOnTheChainLock_IsRetriedAndStored()
+    {
+        var holder = await HoldChainLockAsync();                   // a long delete batch holding the chain lock
+        var before = AuditChain.FailedAppends;
+        var append = ShortChain(new[] { TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200) })
+            .AppendAsync("original.stored", 42, new string('a', 64), new { n = 1 });
+        await Task.Delay(1500);                                      // the first attempt has timed out by now (lock_timeout 1 s)
+        Assert.False(append.IsCompleted);                            // still trying, not given up
+        await ReleaseAsync(holder);
+
+        var entry = await append;
+
+        Assert.NotNull(entry);
+        Assert.Equal(before, AuditChain.FailedAppends);
+        Assert.Equal(1, entry!.Seq);
+    }
+
+    [Fact]
+    public async Task AnAppend_ThatNeverGetsTheLock_ReturnsNull_AndIsCounted()
+    {
+        var holder = await HoldChainLockAsync();
+        try
+        {
+            var before = AuditChain.FailedAppends;
+            var entry = await ShortChain(new[] { TimeSpan.FromMilliseconds(50) }).AppendAsync("original.stored", 43, new string('b', 64), null);
+
+            Assert.Null(entry);                                      // the caller sees the loss
+            Assert.Equal(before + 1, AuditChain.FailedAppends);      // and it is counted for the integrity API
+        }
+        finally { await ReleaseAsync(holder); }
+    }
+
     [Fact]
     public async Task EmptyChain_IsValid_WithNoHead()
     {
