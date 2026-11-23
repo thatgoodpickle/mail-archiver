@@ -122,8 +122,15 @@ downloaded, nothing is changed in the mailbox) and sorts each message into exact
 filtered out by the Gmail search filter, not yet seen. The groups must add up to the messages on the server, and **"not yet seen" must be 0**. If it is not,
 the page lists those messages with a Gmail search link each: press Full resync again and read the log. Mail that arrived after the last sync shows up there
 too. The check covers only the synced folders (Spam and Trash are outside it) and proves the archive holds what Gmail's IMAP served, not that Google's copy
-was byte for byte the same. See `DeleteMemory.md`. Only when the whole mailbox is in, the counts
-match and the checks are clean: take a manual PBS backup
+was byte for byte the same. See `DeleteMemory.md`.
+
+**Do not compare the archive's email count with a number from the filter or from Gmail yourself** (for example "kept by the filter" against "archived
+plus set aside"): that sum gives false alarms. A message is counted in ONE group only, and the first matching group wins. So mail you tagged
+Marketing AFTER it was archived is still counted as archived, never as filtered out (the archive may legitimately hold more than the filter keeps today),
+and a message you deleted from the archive on purpose is "deleted by you", not missing. **"Filtered out"** means: Gmail's search filter excludes the
+message TODAY and the archive does not hold it. That is the Marketing mail you wanted left out, not a gap. Only "not yet seen" is a problem.
+
+Only when the whole mailbox is in, the groups add up with "not yet seen" at 0 and the checks are clean: take a manual PBS backup
 (label it "first full sync"), and from then on the daily job is your safety net.
 
 ## 8. Backups with PBS
