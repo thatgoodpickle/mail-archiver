@@ -15,6 +15,12 @@ namespace MailArchiver.Services.Shared
         /// <summary>Counts one more failure of a message; quarantines it once the count reaches the limit.</summary>
         Task<SyncFailureResult> RecordFailureAsync(int accountId, string folderName, long uidValidity, long uid, string? messageId, string reason, CancellationToken cancellationToken = default, string? gmailMessageId = null);
 
+        /// <summary>
+        /// Audit finding 14: the folder now has another UIDVALIDITY. Rows recorded under an older one (still Failing or Quarantined) can never
+        /// be loaded again, so they are marked Superseded. Returns how many rows changed.
+        /// </summary>
+        Task<int> SupersedeStaleAsync(int accountId, string folderName, long currentUidValidity, CancellationToken cancellationToken = default);
+
         /// <summary>A message was archived after all: its problem record goes.</summary>
         Task ResolveAsync(int accountId, string folderName, long uidValidity, long uid, CancellationToken cancellationToken = default);
 
@@ -71,6 +77,14 @@ namespace MailArchiver.Services.Shared
         public async Task ResolveAsync(int accountId, string folderName, long uidValidity, long uid, CancellationToken ct = default)
             => await _db.SyncProblemMessages.Where(p => p.MailAccountId == accountId && p.FolderName == folderName && p.UidValidity == uidValidity && p.Uid == uid).ExecuteDeleteAsync(ct);
 
+        public async Task<int> SupersedeStaleAsync(int accountId, string folderName, long currentUidValidity, CancellationToken ct = default)
+            => await _db.SyncProblemMessages
+                .Where(p => p.MailAccountId == accountId && p.FolderName == folderName && p.UidValidity != currentUidValidity && p.Status != SyncProblemMessage.Superseded)
+                .ExecuteUpdateAsync(u => u
+                    .SetProperty(p => p.Status, SyncProblemMessage.Superseded)
+                    .SetProperty(p => p.QuarantinedAt, (DateTime?)null)
+                    .SetProperty(p => p.LastSeen, DateTime.UtcNow), ct);
+
         public async Task<int> RetryAsync(int? id, int? accountId, CancellationToken ct = default)
         {
             var q = _db.SyncProblemMessages.Where(p => p.Status == SyncProblemMessage.Quarantined);
@@ -83,7 +97,7 @@ namespace MailArchiver.Services.Shared
         }
 
         public async Task<IReadOnlyList<SyncProblemMessage>> ListAsync(int limit, CancellationToken ct = default)
-            => await _db.SyncProblemMessages.AsNoTracking().OrderByDescending(p => p.Status == SyncProblemMessage.Quarantined).ThenByDescending(p => p.LastSeen)
+            => await _db.SyncProblemMessages.AsNoTracking().Where(p => p.Status != SyncProblemMessage.Superseded).OrderByDescending(p => p.Status == SyncProblemMessage.Quarantined).ThenByDescending(p => p.LastSeen)
                 .Take(Math.Clamp(limit, 1, 1000)).ToListAsync(ct);
 
         public async Task<int> CountQuarantinedAsync(int? accountId = null, CancellationToken ct = default)

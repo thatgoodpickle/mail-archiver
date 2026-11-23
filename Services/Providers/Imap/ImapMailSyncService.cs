@@ -119,6 +119,7 @@ namespace MailArchiver.Services.Providers.Imap
             var newEmails = 0;
             var failedEmails = 0;
             var quarantinedEmails = 0;
+            var fullResyncRequested = false;
             var skippedDeletedEmails = 0;
             var failedFolders = 0;
             var missingFolders = 0;
@@ -225,6 +226,7 @@ namespace MailArchiver.Services.Providers.Imap
                         newEmails += folderResult.NewEmails;
                         failedEmails += folderResult.FailedEmails;
                         quarantinedEmails += folderResult.QuarantinedEmails;
+                        fullResyncRequested |= folderResult.FullResyncRequested;
                         skippedDeletedEmails += folderResult.SkippedDeletedEmails;
                         failedFolders += folderResult.FailedFolders;
                         missingFolders += folderResult.MissingFolders;
@@ -358,7 +360,12 @@ namespace MailArchiver.Services.Providers.Imap
                     return;
                 }
 
-                if (SyncCompletionPolicy.MayAdvanceLastSync(failedEmails, failedFolders))
+                if (fullResyncRequested)
+                {
+                    // Audit finding 14: LastSync was put back to 1970 for the Full resync; moving it forward would cancel the request.
+                    _logger.LogInformation("Not updating LastSync for account {AccountName}: a Full resync was requested because a folder was renumbered", account.Name);
+                }
+                else if (SyncCompletionPolicy.MayAdvanceLastSync(failedEmails, failedFolders))
                 {
                     var trackedAccount = await _context.MailAccounts.FindAsync(account.Id);
                     if (trackedAccount != null)
@@ -1127,6 +1134,25 @@ namespace MailArchiver.Services.Providers.Imap
                     IReadOnlyDictionary<long, SyncProblemMessage> problems = new Dictionary<long, SyncProblemMessage>();
                     if (_problems != null)
                     {
+                        // Audit finding 14: records kept under an older UIDVALIDITY can never match a UID again. They are marked Superseded
+                        // (no longer listed or counted), and, unless this run already is a full sync, a Full resync is requested so the
+                        // messages behind them are read again under the new numbering.
+                        try
+                        {
+                            var superseded = await _problems.SupersedeStaleAsync(account.Id, folder.FullName, folder.UidValidity, cancellationToken);
+                            if (superseded > 0)
+                            {
+                                _logger.LogWarning("Folder {FolderName} of account {AccountName} was renumbered by the server (UIDVALIDITY is now {Validity}): {Count} earlier problem records no longer apply and were cleared.{Next}",
+                                    folder.FullName, account.Name, folder.UidValidity, superseded,
+                                    isFullSync ? " This run is a full sync and reads the folder again." : " A Full resync was requested so the messages are read again.");
+                                if (!isFullSync)
+                                {
+                                    await MailArchiver.Services.Shared.FullSyncRequest.RequestAsync(_context, _bandwidthService, account.Id, clearCheckpoints: false, cancellationToken);
+                                    result.FullResyncRequested = true;
+                                }
+                            }
+                        }
+                        catch (Exception sex) when (sex is not OperationCanceledException) { _logger.LogWarning(sex, "Could not clear the outdated problem records of folder {FolderName}", folder.FullName); }
                         try { problems = await _problems.LoadAsync(account.Id, folder.FullName, folder.UidValidity, cancellationToken); }
                         catch (Exception pex) when (pex is not OperationCanceledException) { _logger.LogWarning(pex, "Could not read the problem messages of folder {FolderName}", folder.FullName); }
                     }
@@ -2049,6 +2075,8 @@ namespace MailArchiver.Services.Providers.Imap
             /// on the Integrity &amp; Storage page, and the account is never reported as completely archived while any exist.
             /// </summary>
             public int QuarantinedEmails { get; set; }
+            /// <summary>Audit finding 14: the folder was renumbered and a Full resync was requested; LastSync must not be moved forward over it.</summary>
+            public bool FullResyncRequested { get; set; }
 
             /// <summary>Messages not archived because they were deleted on purpose earlier (a deletion marker matched). Not a failure.</summary>
             public int SkippedDeletedEmails { get; set; }

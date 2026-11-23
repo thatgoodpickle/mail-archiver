@@ -12,6 +12,13 @@ namespace MailArchiver.Models
         public const string Failing = "Failing";
         public const string Quarantined = "Quarantined";
 
+        /// <summary>
+        /// Audit finding 14: the folder's UIDVALIDITY changed, so this UID no longer names the message. The row is history only: it is not
+        /// listed, not counted as quarantined and not used by the coverage check. The messages are read again by the Full resync the sync
+        /// requests when it finds such rows.
+        /// </summary>
+        public const string Superseded = "Superseded";
+
         public int Id { get; set; }
         public int MailAccountId { get; set; }
         public string FolderName { get; set; } = string.Empty;

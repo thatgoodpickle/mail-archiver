@@ -45,4 +45,50 @@ public class AuditFixesBSyncTests
         Assert.True(ok.LastSync > DateTime.UtcNow.AddMinutes(-5));
         Assert.Equal(2, (await rig.ArchivedMessageIdsAsync()).Count);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task F14_AfterAUidValidityChange_OldProblemRowsAreSuperseded_AndTheMessageIsReadAgainByTheRequestedFullResync(bool retryFirst)
+    {
+        using var rig = new SyncRig(_fixture); await rig.InitAsync();
+        var a = rig.AddMail(); var bad = rig.AddMail(); var c = rig.AddMail();
+        rig.Server.OnBodyFetch = (_, uid) => uid == bad.Uid ? (FakeImapServer.FetchAction.No, "Invalid message data") : (FakeImapServer.FetchAction.Normal, "");
+        for (var i = 0; i < 3; i++) await rig.RunAsync();
+        var row = Assert.Single(await rig.ProblemsAsync());
+        Assert.Equal(SyncProblemMessage.Quarantined, row.Status);
+        Assert.Equal(1, row.UidValidity);
+        Assert.Equal(2, (await rig.ArchivedMessageIdsAsync()).Count);
+
+        if (retryFirst)
+        {
+            // An administrator presses Retry on the listed row: it goes back into the flow.
+            var run = rig.NewRun();
+            try { Assert.Equal(1, await run.Problems.RetryAsync(row.Id, null)); } finally { await run.Ctx.DisposeAsync(); }
+        }
+
+        // The server renumbers the folder; the message is healthy again.
+        rig.Server.Main.UidValidity = 2;
+        rig.Server.OnBodyFetch = (_, _) => (FakeImapServer.FetchAction.Normal, "");
+        var r1 = await rig.RunAsync();
+
+        // The old row no longer shows up as set aside, and a Full resync is pending (LastSync back at 1970, not moved forward).
+        var old = Assert.Single(await rig.ProblemsAsync());
+        Assert.Equal(SyncProblemMessage.Superseded, old.Status);
+        var check = rig.NewRun();
+        try
+        {
+            Assert.Equal(0, await check.Problems.CountQuarantinedAsync(rig.Account.Id));
+            Assert.DoesNotContain(await check.Problems.ListAsync(1000), p => p.MailAccountId == rig.Account.Id);
+        }
+        finally { await check.Ctx.DisposeAsync(); }
+        Assert.Equal(FullSyncRequest.EpochUtc, r1.LastSync);
+
+        // The next run is that Full resync: the message comes back, and LastSync moves on.
+        var r2 = await rig.RunAsync();
+        Assert.Equal(3, (await rig.ArchivedMessageIdsAsync()).Count);
+        Assert.True(r2.LastSync > DateTime.UtcNow.AddMinutes(-5));
+        // The superseded row is not resurrected and nothing is counted as set aside.
+        Assert.All(await rig.ProblemsAsync(), p => Assert.Equal(SyncProblemMessage.Superseded, p.Status));
+    }
 }

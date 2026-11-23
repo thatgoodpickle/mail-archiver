@@ -155,7 +155,7 @@ namespace MailArchiver.Services.Shared
                 .ToListAsync(ct);
             foreach (var a in archived) held.AddArchived(a.GmailMessageId, a.MessageId, a.Size, a.FolderName);
             foreach (var m in await _db.DeletedMessageMarkers.AsNoTracking().Where(m => m.AccountId == account.Id).ToListAsync(ct)) held.AddMarker(m);
-            foreach (var p in await _db.SyncProblemMessages.AsNoTracking().Where(p => p.MailAccountId == account.Id).ToListAsync(ct)) held.AddProblem(p);
+            foreach (var p in await _db.SyncProblemMessages.AsNoTracking().Where(p => p.MailAccountId == account.Id && p.Status != SyncProblemMessage.Superseded).ToListAsync(ct)) held.AddProblem(p);
 
             var buckets = Enum.GetValues<CoverageBucket>().ToDictionary(b => b, _ => 0);
             var notSeen = new List<CoverageNotSeen>();
