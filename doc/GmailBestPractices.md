@@ -26,6 +26,11 @@ label and its filters in Gmail, and tagged mail, including sub-labels, is never 
 confirmations, invoices and receipts often carry an unsubscribe link). Use "Test the filter" on the account's Edit page to see how many messages
 it skips.
 
+**Deleting and Full resync.** A message you delete in the archive on purpose is remembered (identifiers only) and a Full resync does not archive it
+again; the account page lists these under "Skipped, deleted by you" with "Allow again". Deleting the account forgets them. The **Coverage check** on the
+account page proves that everything Gmail lists is archived, deleted by you, set aside, or filtered out (the filter's result is read as a set of
+message ids: "filtered out" are the messages that are not in what the filter keeps). See `DeleteMemory.md`.
+
 ## 🏷️ Gmail Label Settings
 
 It is strongly recommended to adjust your Gmail label settings to prevent the "All Mail" label from being exposed via IMAP:

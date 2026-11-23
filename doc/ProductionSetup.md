@@ -97,9 +97,13 @@ Raise Gmail's cap to 5,000, then 10,000, then "Do not limit". **After EVERY rais
 This is required: the ordinary sync only looks for mail delivered after the last sync (minus 12 hours), and a raised cap reveals OLDER mail,
 which that search never finds. Without the Full resync the account looks complete while thousands of older messages are missing. A Full
 resync does not download what is already archived again (the sync checks the Message-ID and size first). Watch the daily download limit: the sync pauses at 2.5 GB and resumes by
-itself the next day, so a 5 GB mailbox takes about three days. **Reconcile the count** before you call it complete: on the account's page press **Test** on the Gmail filter and note how many messages
-it KEEPS (not skips); that number must equal the number of emails archived for the account (plus any listed under "Messages that could not
-be archived"). A difference means mail is missing: press Full resync again and read the log. Only when the whole mailbox is in, the counts
+itself the next day, so a 5 GB mailbox takes about three days. **Run the coverage check** before you call it complete (replaces the manual rule of comparing the filter's kept count with the archived count): on
+the account's page press **Coverage check**, then **Run the coverage check**. It asks Gmail for the identity of every message in All Mail (no text is
+downloaded, nothing is changed in the mailbox) and sorts each message into exactly one group: archived, deleted by you, set aside after failing,
+filtered out by the Gmail search filter, not yet seen. The groups must add up to the messages on the server, and **"not yet seen" must be 0**. If it is not,
+the page lists those messages with a Gmail search link each: press Full resync again and read the log. Mail that arrived after the last sync shows up there
+too. The check covers only the synced folders (Spam and Trash are outside it) and proves the archive holds what Gmail's IMAP served, not that Google's copy
+was byte for byte the same. See `DeleteMemory.md`. Only when the whole mailbox is in, the counts
 match and the checks are clean: take a manual PBS backup
 (label it "first full sync"), and from then on the daily job is your safety net.
 

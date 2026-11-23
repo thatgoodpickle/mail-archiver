@@ -1,4 +1,4 @@
-# Spec v2 APPROVED by the user 2026-11-23 (reviewed once by the advisor; option 1 + coverage check; all questions answered); NOTHING BUILT YET
+# Spec v2 APPROVED by the user 2026-11-23 (reviewed once by the advisor; option 1 + coverage check; all questions answered); BUILT on branch delete-memory, not deployed. Audit corrections applied: filtered out = server messages NOT in the filter's keep set; a marker never makes a delete fail (ON CONFLICT DO UPDATE); rows without a Gmail id fall back to Message-ID + size.
 
 Found on the clio test stack: delete an IMAP email in the archive, press Full resync, the email is archived again as a new id ("Found 14 messages", New: 2). A deletion only lasts until the next Full resync, and the production guide needs a Full resync after every Gmail cap raise.
 
