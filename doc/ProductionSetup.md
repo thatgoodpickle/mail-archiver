@@ -23,7 +23,11 @@ and Gmail keeps every message.
 sudo mkdir -p /opt/stacks/mail-archive && sudo chown "$USER": /opt/stacks/mail-archive
 cd /opt/stacks/mail-archive
 mkdir -p originals pgdata logs keys manifests
-curl -fsSL https://raw.githubusercontent.com/thatgoodpickle/mail-archiver/integrity/deploy/compose.production.yml -o compose.yml
+# Fetch the compose file from a COMMIT (or a release tag), never from the branch name: a branch moves, and the file must match the image.
+# REF = the full 40-character commit you deploy (the image tag sha-xxxxxxx is its first 7 characters). Find it, for example, with:
+#   git ls-remote https://github.com/thatgoodpickle/mail-archiver integrity
+REF=<full commit hash or tag>
+curl -fsSL "https://raw.githubusercontent.com/thatgoodpickle/mail-archiver/$REF/deploy/compose.production.yml" -o compose.yml
 
 umask 077
 printf 'DB_PASSWORD=%s\nADMIN_PASSWORD=%s\nBIND_ADDR=%s\nAPP_PORT=5555\n' \
@@ -33,8 +37,23 @@ umask 022
 docker compose up -d
 docker compose logs --tail 30 mailarchiver
 ```
-Use the VM's own LAN address for `BIND_ADDR` (for example `10.0.0.5`), so the app is not published on every interface. If the
-firewall (ufw) is on, allow only your LAN to that port. Check the port is free (`ss -ltn | grep 5555`) and change `APP_PORT` if not.
+Use the VM's own LAN address for `BIND_ADDR` (for example `10.0.0.5`), so the app is not published on every interface: this is the
+real access control. **Do not rely on ufw for this port:** Docker publishes ports through its own iptables rules, which are evaluated
+before ufw, so a ufw rule such as "allow from the LAN to 5555" neither opens nor closes a Docker-published port. If you need more
+than `BIND_ADDR` (for example only one workstation may connect), limit it on the router or VLAN, or add rules to the `DOCKER-USER`
+iptables chain (the chain Docker leaves for your own rules; it sees the container port after address translation, so match the
+original port with `-m conntrack --ctorigdstport 5555`). Check the port is free (`ss -ltn | grep 5555`) and change `APP_PORT` if not.
+
+**Pin both images by digest** (a registry tag can be pushed again; a digest cannot). The compose file reads two optional values from
+`.env`. Fetch the digests yourself, once, on a machine you trust, and append them (the values below are placeholders; this guide
+contains no real digests):
+```
+docker buildx imagetools inspect ghcr.io/thatgoodpickle/mailarchiver:sha-741adab --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect postgres:17-alpine --format '{{.Manifest.Digest}}'
+printf 'APP_DIGEST=@sha256:<digest of the app image>\nPOSTGRES_DIGEST=@sha256:<digest of the postgres image>\n' >> .env
+```
+Leave them out and the stack runs on the tags alone (acceptable for the rehearsal, not for production). On an upgrade (section 9)
+fetch the new app digest and change the tag and `APP_DIGEST` together. Take a new Postgres digest only on purpose, within major version 17.
 
 Log in at `http://<BIND_ADDR>:5555` as `admin` with the `ADMIN_PASSWORD` from `.env` (`grep ADMIN_PASSWORD .env`; never paste it
 anywhere). The app forces you to choose a new password at the first login: choose a long one and store it in the password manager.
@@ -121,7 +140,8 @@ match and the checks are clean: take a manual PBS backup
 ## 9. Upgrades and rollback
 
 1. Manual PBS backup. 2. Read `nextrelease.md` for what changed and any new setting. 3. Edit the `image:` line in `compose.yml` to the new
-`sha-xxxxxxx` tag (the CI run of that commit must be green). 4. `docker compose pull && docker compose up -d`; watch the log; run both
+`sha-xxxxxxx` tag (the CI run of that commit must be green), set the matching `APP_DIGEST` in `.env` (section 2) and fetch the compose file of
+that same commit (section 2, `REF`) if it changed. 4. `docker compose pull && docker compose up -d`; watch the log; run both
 checks on the page. Rollback = restore the PBS backup (do not run an older image against a database a newer one has migrated).
 
 ## 10. Known limits (stated plainly)
