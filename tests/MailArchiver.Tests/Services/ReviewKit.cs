@@ -37,7 +37,7 @@ internal sealed class ReviewKit : IDisposable
     }
 
     /// <summary>A context like production's; with <paramref name="withChain"/> it also has the audit chain interceptor.</summary>
-    public MailArchiverDbContext NewContext(bool withChain = false)
+    public MailArchiverDbContext NewContext(bool withChain = false, params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] extraInterceptors)
     {
         var builder = new DbContextOptionsBuilder<MailArchiverDbContext>()
             .UseNpgsql(_fixture.ConnectionString, npgsql => npgsql.CommandTimeout(120))
@@ -45,6 +45,7 @@ internal sealed class ReviewKit : IDisposable
             .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
         if (withChain)
             builder.AddInterceptors(new AuditChainInterceptor(new ServiceCollection().AddSingleton(Chain).BuildServiceProvider()));
+        if (extraInterceptors.Length > 0) builder.AddInterceptors(extraInterceptors);
         return new MailArchiverDbContext(builder.Options);
     }
 

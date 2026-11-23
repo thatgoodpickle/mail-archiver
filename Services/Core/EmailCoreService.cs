@@ -2192,6 +2192,7 @@ namespace MailArchiver.Services.Core
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error saving archived email to database: {Subject}, {Message}", subject, ex.Message);
+                    DetachPendingAdds();
                     return ArchiveOutcome.Failed;
                 }
             }
@@ -2199,7 +2200,27 @@ namespace MailArchiver.Services.Core
             {
                 _logger.LogError(ex, "Error archiving email: Subject={Subject}, From={From}, Error={Message}",
                     message.Subject, message.From, ex.Message);
+                DetachPendingAdds();
                 return ArchiveOutcome.Failed;
+            }
+        }
+
+        /// <summary>
+        /// Audit finding 10: after a failed save the Added email, attachments and original rows would stay in the shared scoped context, and the
+        /// next successful SaveChanges (the following message, the failure record, the checkpoint) would commit them: an email without its
+        /// original even with Required on. Only the Added entries are detached; the caller's other tracked entities are left alone.
+        /// </summary>
+        private void DetachPendingAdds()
+        {
+            try
+            {
+                foreach (var entry in _context.ChangeTracker.Entries().Where(e => e.State == EntityState.Added).ToList())
+                    entry.State = EntityState.Detached;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Could not detach the rows of a failed save; clearing the change tracker instead");
+                try { _context.ChangeTracker.Clear(); } catch { /* nothing more to do */ }
             }
         }
 
