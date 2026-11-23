@@ -1759,7 +1759,12 @@ namespace MailArchiver.Services.Core
             // silently. It is archived as a second email (the Message-ID is not unique in the archive), and the log says so. Only
             // decided when we hold the original of the existing email(s) and have the new one to compare.
             var isVariant = false;
-            if (existingEmail != null && rawMessage != null && rawMessage.Bytes.Length > 0)
+            // Audit finding 18: bytes that were RE-SERIALIZED by us (the recovery path after the server answered "message not found", or an
+            // import) are not the server's original, so their hash says nothing about whether two copies are the same message. A held
+            // re-serialized row is therefore never a reason to call a normally fetched message a variant (and a re-serialized newcomer is
+            // never a variant of a held message): without that, the same server message ends up archived twice.
+            if (existingEmail != null && rawMessage != null && rawMessage.Bytes.Length > 0
+                && !string.Equals(rawMessage.Source, RawMessageSource.Serialized, StringComparison.Ordinal))
             {
                 var newSha = RawMessageCodec.ComputeSha256(rawMessage.Bytes);
                 var heldShas = await _context.ArchivedEmails.AsNoTracking()
@@ -1767,6 +1772,7 @@ namespace MailArchiver.Services.Core
                         (e.MessageId == messageId ||
                          (legacyMessageId != null && e.MessageId == legacyMessageId) ||
                          (importedMessageId != null && e.MessageId == importedMessageId)))
+                    .Where(e => e.RawMessage == null || e.RawMessage.Source != RawMessageSource.Serialized)
                     .Select(e => e.RawMessage != null ? e.RawMessage.Sha256 : null)
                     .ToListAsync();
                 if (heldShas.Any(h => h != null) && !heldShas.Contains(newSha))
